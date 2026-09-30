@@ -70,8 +70,14 @@ def run_one(checkpoint: str, z: float, task: str, num_envs: int, blocks: int,
         f"checkpoint_path={checkpoint}",
         "headless=true",
         f"task.num_envs={num_envs}",
-        # Pin the target instead of randomizing it.
+        # Pin the target: everything fixed except the swept z. Tasks like
+        # wall_painting_goal also randomize the in-plane position and the width,
+        # so those must be pinned too or the "pinned" target still moves.
+        # `++` adds the key when the task config does not declare it.
         f"task.command.target_region_pos_range.z=[{z},{z}]",
+        "++task.command.target_region_uv_range.u=[0.0,0.0]",
+        "++task.command.target_region_uv_range.v=[0.0,0.0]",
+        "task.command.target_region_scale_range.width=[1.0,1.0]",
         "task.command.target_region_scale_range.height=[1.0,1.0]",
     ]
 
