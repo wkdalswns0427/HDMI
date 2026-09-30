@@ -75,6 +75,17 @@ class SimpleEnv(_Env):
                     extra_obj_cfg.prim_path = "{ENV_REGEX_NS}/" + extra_obj_name
                     setattr(scene_cfg, extra_obj_name, extra_obj_cfg)
 
+                # Visualization canvas for the painting tasks. Spawned only
+                # when the task defines a paint target, and only when
+                # show_canvas is left on. It has no collision, so it changes
+                # nothing physically -- see CANVAS_CFG.
+                if (self.cfg.command.get("target_region_path", None) is not None
+                        and self.cfg.command.get("show_canvas", True)):
+                    canvas_cfg = OBJECTS["canvas"]
+                    canvas_cfg.prim_path = "{ENV_REGEX_NS}/canvas"
+                    setattr(scene_cfg, "canvas", canvas_cfg)
+                    print("Spawning paint canvas (visual only, no collision)")
+
                 obj_name = self.cfg.command.object_asset_name
                 obj_contact_body_name = self.cfg.command.object_body_name
 

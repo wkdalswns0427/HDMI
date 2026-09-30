@@ -2,12 +2,14 @@ import os
 
 from .objects import *
 from .g1 import *
+from .h1_2 import *
 
 
 ASSET_PATH = os.path.dirname(__file__)
 
 ROBOTS = {
     "g1": G1_CYLINDER_CFG,
+    "h1_2": H1_2_CFG,
 }
 
 OBJECTS = {
@@ -27,6 +29,10 @@ OBJECTS = {
     "stair": STAIR_CFG,
     "wood_board": WOOD_BOARD_CFG,
     "bread_box": BREAD_BOX_CFG,
+    "shovel": SHOVEL_CFG,
+    "shovel_h1_2": SHOVEL_H1_2_CFG,
+    "roller": ROLLER_CFG,
+    "canvas": CANVAS_CFG,
     "wall0": WALL0_CFG,
     "platform0": PLATFORM0_CFG,
     "platform1": PLATFORM1_CFG,

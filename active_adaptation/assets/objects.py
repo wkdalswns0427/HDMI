@@ -325,3 +325,71 @@ FOLDCHAIR_CFG = ArticulationCfg(
         )
     },
 )
+
+# --- shovel -----------------------------------------------------------------
+# A shovel spans both hands, so what matters for HDMI is the shaft's pose and
+# the two grip points along it -- not the blade geometry. The asset is a bare
+# capsule authored by pipeline/scripts/make_shovel_usd.py.
+#
+# It must be a USD (not a CapsuleCfg primitive): envs/locomotion.py assumes
+# every object spawn has `.usd_path`, and builds the contact sensor path as
+# {ENV_REGEX_NS}/<asset>/<object_body_name>, which only resolves with the
+# nested-same-name layout the shipped assets use (/shovel/shovel).
+#
+# Local +Z runs along the shaft from blade end to handle top, origin at the
+# shaft midpoint; the task config's contact_target_pos_offset places the hands.
+SHOVEL_CFG = RigidObjectCfg(
+    prim_path="{ENV_REGEX_NS}/shovel",
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=f"{ASSET_PATH}/objects/shovel/shovel.usd",
+        activate_contact_sensors=True,
+        mass_props=sim_utils.MassPropertiesCfg(
+            mass=2.5,
+        ),
+    ),
+)
+
+
+# H1-2 variant: longer handle. GMR scales the human motion to the robot, so
+# H1-2's grip span is 0.745 m against G1's 0.438 m -- a 1.04 m shaft would put
+# the hands past its ends. 1.345 m total (1.295 cylinder + 2*0.025 caps), 3.0 kg.
+SHOVEL_H1_2_CFG = RigidObjectCfg(
+    prim_path="{ENV_REGEX_NS}/shovel_h1_2",
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=f"{ASSET_PATH}/objects/shovel_h1_2/shovel_h1_2.usd",
+        activate_contact_sensors=True,
+        mass_props=sim_utils.MassPropertiesCfg(mass=3.0),
+    ),
+)
+
+
+# --- roller --------------------------------------------------------------------
+ROLLER_CFG = RigidObjectCfg(
+    prim_path="{ENV_REGEX_NS}/roller",
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=f"{ASSET_PATH}/objects/roller/roller.usd",
+        activate_contact_sensors=True,
+        mass_props=sim_utils.MassPropertiesCfg(
+            mass=2.5,
+        ),
+    ),
+)
+
+# --- canvas ---------------------------------------------------------------
+# Visualization only for the painting tasks: kinematic so it never moves, and
+# NO collision_props, so the roller passes through and the dynamics are
+# identical to a run without it. Positioned from the task's paint target
+# rectangle at reset, not from motion data.
+CANVAS_CFG = RigidObjectCfg(
+    prim_path="{ENV_REGEX_NS}/canvas",
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=f"{ASSET_PATH}/objects/canvas/canvas.usd",
+        activate_contact_sensors=False,
+        mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
+        rigid_props=sim_utils.RigidBodyPropertiesCfg(
+            rigid_body_enabled=True,
+            kinematic_enabled=True,
+            disable_gravity=True,
+        ),
+    ),
+)

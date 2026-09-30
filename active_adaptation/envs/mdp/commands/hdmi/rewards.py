@@ -350,6 +350,24 @@ class object_ori_tracking(RobotObjectTrackReward):
         rew = torch.exp(- object_ori_error / self.sigma).unsqueeze(1)
         return rew
 
+class paint_coverage_delta(RobotObjectTrackReward):
+    def compute(self):
+        return self.command_manager.coverage_delta
+
+class paint_coverage(RobotObjectTrackReward):
+    """Same quantity as paint_coverage_delta, meant to be listed under
+    reward.debug with weight 1.0 and enabled: false.
+
+    Reward stats accumulate the WEIGHTED value over an episode
+    (envs/mdp/base.py: `return self.weight * rew`), and the deltas sum to the
+    coverage ratio, so at weight 1.0 the accumulated stat reads directly as
+    final coverage. The task-group term is weighted 400, which is why it cannot
+    be read off the same way.
+    """
+
+    def compute(self):
+        return self.command_manager.coverage_delta
+
 class object_joint_pos_tracking(RobotObjectTrackReward):
     def __init__(self, sigma: float=0.25, **kwargs):
         super().__init__(**kwargs)
@@ -406,6 +424,104 @@ class eef_contact_exp(RobotObjectTrackReward):
         # shape: [num_envs]
         rew = (rew * self.in_range.float() * self.gain + 1 - self.in_range.float()).mean(dim=-1)
         return rew.unsqueeze(-1)
+
+class eef_contact_exp_both(RobotObjectTrackReward):
+    """eef_contact_exp with the two end-effectors multiplied instead of averaged.
+
+    The mean version pays half credit for holding the object with one hand,
+    which on wall_painting2 is a local optimum the policy settles into: it grips
+    the roller with one hand, parks the other on the hip, and contact per step
+    parks around 0.35 against a one-handed ceiling of 0.5. Taking the product
+    makes a one-handed grip worth zero.
+
+    Out-of-contact-phase end-effectors contribute 1.0, which is the identity for
+    a product, so the gating works the same as in the mean version. Peak value is
+    still `gain`, so the weight can be carried over unchanged.
+    """
+
+    def __init__(
+        self,
+        pos_sigma: float=0.1,
+        pos_tolerance: float=0.0,
+        frc_sigma: float=10.0,
+        frc_thres: float | Tuple[float, float, float]=2.0,
+        gain: float=1.0,
+        **kwargs
+    ):
+        super().__init__(**kwargs)
+        self.gain = gain
+        self.eef_pos_error = torch.zeros(self.num_envs, self.command_manager.num_eefs, device=self.device)
+        self.eef_frc = torch.zeros(self.num_envs, self.command_manager.num_eefs, 3, device=self.device)
+
+        self.pos_sigma = pos_sigma
+        self.pos_tolerance = pos_tolerance
+
+        self.frc_sigma = frc_sigma
+        self.frc_thres = frc_thres
+        if isinstance(frc_thres, ListConfig):
+            self.frc_thres = torch.tensor(frc_thres, device=self.device)
+
+    def update(self):
+        self.in_range = self.command_manager.ref_object_contact
+
+        eef_pos_diff = self.command_manager.contact_eef_pos_w - self.command_manager.contact_target_pos_w
+        eef_frc = self.command_manager.eef_contact_forces_b
+
+        self.eef_pos_error[:] = (eef_pos_diff.norm(dim=-1) - self.pos_tolerance).clamp_min(0.0)
+        self.eef_frc[:] = eef_frc
+
+    def compute(self):
+        if isinstance(self.frc_thres, float):
+            contact_frc = (self.eef_frc.norm(dim=-1) - self.frc_thres).clamp_max(0.0)
+        else:
+            contact_frc = (self.eef_frc.abs() - self.frc_thres).clamp_max(0.0).mean(dim=-1)
+
+        per_eef = torch.exp(-self.eef_pos_error / self.pos_sigma) * torch.exp(contact_frc / self.frc_sigma)
+        gated = per_eef * self.in_range.float() + (1 - self.in_range.float())
+        rew = gated.prod(dim=-1) * self.gain
+        return rew.unsqueeze(-1)
+
+
+class eef_contact_both(RobotObjectTrackReward):
+    """Binary "are BOTH hands on the object" indicator, for reading off as a stat.
+
+    eef_contact_all averages over the end-effectors, so a one-handed grip reads
+    0.5. This reads 0. List it under reward.debug with weight 1.0 and
+    enabled: false; divide the accumulated stat by episode_len for a per-step
+    fraction.
+    """
+
+    def __init__(
+        self,
+        pos_thres: float=0.1,
+        frc_thres: float | Tuple[float, float, float]=2.0,
+        **kwargs
+    ):
+        super().__init__(**kwargs)
+        self.eef_pos_error = torch.zeros(self.num_envs, 2, device=self.device)
+        self.eef_frc = torch.zeros(self.num_envs, 2, 3, device=self.device)
+        self.pos_thres = pos_thres
+        self.frc_thres = frc_thres
+        if isinstance(frc_thres, ListConfig):
+            self.frc_thres = torch.tensor(frc_thres, device=self.device)
+
+    def update(self):
+        self.in_range = self.command_manager.ref_object_contact
+        eef_pos_diff = self.command_manager.contact_eef_pos_w - self.command_manager.contact_target_pos_w
+        self.eef_pos_error[:] = eef_pos_diff.norm(dim=-1)
+        self.eef_frc[:] = self.command_manager.eef_contact_forces_b
+
+    def compute(self):
+        contact_pos = (self.eef_pos_error < self.pos_thres)
+        if isinstance(self.frc_thres, float):
+            contact_frc = (self.eef_frc.norm(dim=-1) >= self.frc_thres)
+        else:
+            contact_frc = (self.eef_frc.abs() >= self.frc_thres).all(dim=-1)
+
+        ok = (contact_pos & contact_frc).float()
+        gated = ok * self.in_range.float() + (1 - self.in_range.float())
+        return gated.prod(dim=-1, keepdim=True)
+
 
 class eef_contact_exp_max(RobotObjectTrackReward):
     def __init__(

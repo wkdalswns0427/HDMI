@@ -2,7 +2,9 @@ from active_adaptation.envs.mdp.commands.hdmi.command import RobotTracking, Robo
 from active_adaptation.envs.mdp.base import Observation as BaseObservation
 
 import torch
+import numpy as np
 from isaaclab.utils.math import (
+    quat_apply,
     quat_apply_inverse,
     quat_mul,
     quat_conjugate,
@@ -11,6 +13,7 @@ from isaaclab.utils.math import (
     wrap_to_pi
 )
 from active_adaptation.utils.math import batchify
+quat_apply = batchify(quat_apply)
 quat_apply_inverse = batchify(quat_apply_inverse)
 
 RobotTrackObservation = BaseObservation[RobotTracking]
@@ -509,3 +512,201 @@ class diff_object_joint_pos_future(RobotObjectTrackObservation):
 class ref_object_contact_future(RobotObjectTrackObservation):
     def compute(self):
         return self.command_manager.ref_object_contact_future.view(self.num_envs, -1)
+
+# ============================================================
+# Wall-painting task observations
+# ============================================================
+
+class target_region_size(RobotObjectTrackObservation):
+    """
+    Target painting-region size.
+
+    Returns normalized [width, height], where 1.0 corresponds
+    to the nominal demonstration target size.
+    """
+
+    def compute(self):
+        # Normalize by the nominal size of the clip THIS env drew, so the
+        # observation means the same thing across a motion set.
+        mids = self.command_manager.motion_ids
+
+        width = (
+            self.command_manager.target_width[:, 0]
+            / self.command_manager.nominal_target_width[mids]
+        )
+
+        height = (
+            self.command_manager.target_height[:, 0]
+            / self.command_manager.nominal_target_height[mids]
+        )
+
+        result = torch.stack([width, height], dim=-1)
+
+        # print(
+        #     "[OBS target_region_size]",
+        #     result[0].detach().cpu().numpy(),
+        #     "shape=",
+        #     tuple(result.shape),
+        # )
+
+        return result
+
+
+class roller_head_uv(RobotObjectTrackObservation):
+    """
+    Roller-head center position in target-centered wall coordinates.
+
+    Coordinates are normalized by half of the current target size:
+        u = -1 / +1 : left / right target boundary
+        v = -1 / +1 : bottom / top target boundary
+
+    Values outside [-1, 1] mean that the roller-head center is
+    outside the target rectangle.
+    """
+
+    def compute(self):
+        head_center_offset_b = (
+            self.command_manager.roller_head_center_b
+            .unsqueeze(0)
+            .expand(self.num_envs, -1)
+        )
+
+        head_center_w = (
+            self.command_manager.object_pos_w
+            + quat_apply(
+                self.command_manager.object_quat_w,
+                head_center_offset_b,
+            )
+        )
+
+        rel = (
+            head_center_w
+            - self.command_manager.target_center_w
+        )
+
+        u = torch.sum(
+            rel
+            * self.command_manager.wall_axis_u_w.unsqueeze(0),
+            dim=-1,
+        )
+
+        v = torch.sum(
+            rel
+            * self.command_manager.wall_axis_v_w.unsqueeze(0),
+            dim=-1,
+        )
+
+        half_width = (
+            0.5
+            * self.command_manager.target_width[:, 0]
+        ).clamp_min(1e-8)
+
+        half_height = (
+            0.5
+            * self.command_manager.target_height[:, 0]
+        ).clamp_min(1e-8)
+
+        u_normalized = u / half_width
+        v_normalized = v / half_height
+
+        result = torch.stack(
+            [u_normalized, v_normalized],
+            dim=-1,
+        )
+
+        # print(
+        #     "[OBS roller_head_uv]",
+        #     result[0].detach().cpu().numpy(),
+        #     "shape=",
+        #     tuple(result.shape),
+        # )
+
+        return result
+
+
+class target_center_b(RobotObjectTrackObservation):
+    """
+    Target-region centre in the robot root frame.
+
+    Three floats. Without this the policy can only perceive the target through
+    roller_head_uv, which is an error signal only once the roller is already at
+    the wall -- fine with the target pinned, not enough once
+    target_region_pos_range opens up. Not enabled by default; list it under
+    observation.object in the task config to switch it on.
+    """
+
+    def compute(self):
+        root_pos_w = self.command_manager.asset.data.root_link_pos_w
+        root_quat_w = self.command_manager.asset.data.root_link_quat_w
+        return quat_apply_inverse(
+            root_quat_w,
+            self.command_manager.target_center_w - root_pos_w,
+        )
+
+
+class paint_coverage_grid(RobotObjectTrackObservation):
+    """
+    Coarse spatial map of accumulated target coverage.
+
+    The active target raster is divided into
+    coverage_grid_size x coverage_grid_size regions.
+
+    Each output value is the fraction of painted raster cells
+    within that region.
+
+    For coverage_grid_size = 4:
+        output shape = [num_envs, 16]
+
+    Batched over envs. The per-block sum is separable, so each row band costs
+    one bmm over the paint mask rather than a Python loop over environments.
+    An empty block reports 0.0 (the per-env version produced NaN there).
+    """
+
+    def compute(self):
+        cm = self.command_manager
+        grid_size = cm.coverage_grid_size
+        num_envs = self.num_envs
+
+        rows = cm._target_rows          # [N]
+        cols = cm._target_cols          # [N]
+
+        row_idx = cm._row_idx.view(1, -1)   # [1, H]
+        col_idx = cm._col_idx.view(1, -1)   # [1, W]
+
+        paint = cm.paint_mask.float()       # [N, H, W]
+
+        output = torch.zeros(
+            num_envs,
+            grid_size * grid_size,
+            dtype=torch.float32,
+            device=self.device,
+        )
+
+        for grid_v in range(grid_size):
+            row_start = (grid_v * rows) // grid_size
+            row_end = ((grid_v + 1) * rows) // grid_size
+
+            row_sel = (
+                (row_idx >= row_start.unsqueeze(1))
+                & (row_idx < row_end.unsqueeze(1))
+            ).float()                                    # [N, H]
+
+            # Column profile of painted cells within this row band.
+            inner = torch.bmm(row_sel.unsqueeze(1), paint).squeeze(1)   # [N, W]
+            band_rows = row_sel.sum(-1)                                 # [N]
+
+            for grid_u in range(grid_size):
+                col_start = (grid_u * cols) // grid_size
+                col_end = ((grid_u + 1) * cols) // grid_size
+
+                col_sel = (
+                    (col_idx >= col_start.unsqueeze(1))
+                    & (col_idx < col_end.unsqueeze(1))
+                ).float()                                # [N, W]
+
+                num = (inner * col_sel).sum(-1)
+                den = (band_rows * col_sel.sum(-1)).clamp_min(1.0)
+
+                output[:, grid_v * grid_size + grid_u] = num / den
+
+        return output
