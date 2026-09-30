@@ -5,7 +5,7 @@ defaults:
   - base/hdmi-base
   - _self_
 
-name: G1WallPainting2Z
+name: G1WallPaintingGoal
 
 viewer:
   env_spacing: 5.0
@@ -38,21 +38,29 @@ command:
 
   # Wall-painting target region
   target_region_path: "/home/mchang344/mj_ws/simbench/pipeline/task_info/wall_painting2/paint_target_rectangle.npz"
-  # Move the GOAL while the reference stays put. The demonstrated roller head
-  # sweeps z = 0.796 .. 1.649 m with the pelvis fixed at 0.809 m, so +-0.15 m
-  # is what a standing policy can reach WITHOUT changing posture. +-0.5 m is
-  # deliberately past that: it puts the target between 0.296 and 2.149 m, which
-  # needs a squat at the bottom and is out of reach at the top from a fixed
-  # stance. That is the point -- it measures where one posture stops working,
-  # which is the number that says whether the bend/squat clips are needed.
-  # Do not go past +-0.6: at -0.7 the target bottom passes through the floor.
+  # Goal-conditioned: the region to paint moves and resizes on the wall, and
+  # the reference motion does not change. This is the setup that asks whether
+  # the coverage objective buys anything the demonstration alone cannot.
+  #
+  # World xyz stays pinned -- moving in world x/y would push the region off
+  # the wall plane (normal [0.879, 0.477, 0]).
   target_region_pos_range:
     x: [0.0, 0.0]
     y: [0.0, 0.0]
-    z: [-0.5, 0.5]
+    z: [0.0, 0.0]
+
+  # In-plane slide along the wall. u is the in-plane horizontal, v is vertical.
+  # +-0.35 u keeps a 0.60 m region inside the 2.0 m wall with room to spare;
+  # +-0.40 v puts the region between 0.40 and 2.05 m, which spans from squat
+  # height to above a standing reach.
+  target_region_uv_range:
+    u: [-0.35, 0.35]
+    v: [-0.40, 0.40]
+
+  # Region size. 0.7x to 1.3x the demonstrated 0.6025 x 0.8529 m.
   target_region_scale_range:
-    width: [1.0, 1.0]
-    height: [0.70, 1.40]
+    width: [0.7, 1.3]
+    height: [0.7, 1.3]
   # Coarse coverage map given to the policy.
   coverage_grid_size: 4
 
@@ -61,22 +69,32 @@ observation:
     target_region_size: {}
     roller_head_uv: {}
     paint_coverage_grid: {}
-    # Where the target is relative to the root. roller_head_uv only becomes an
-    # error signal once the roller is already at the wall, which is not enough
-    # when the target itself moves. Comment out to run the ablation.
+    # Required once the target moves: roller_head_uv only becomes an error
+    # signal when the roller is already at the wall, which is too late if the
+    # region could be anywhere. This changes the object obs from 30 to 33, so
+    # a checkpoint trained without it cannot be loaded into this task.
     target_center_b: {}
 
 reward:
   object_tracking:
-    eef_contact_exp: {weight: 0.5}
+    # Product over the two hands instead of a mean, so a one-handed grip scores
+    # zero rather than half. The mean version lets the policy settle into
+    # holding the roller with one hand and parking the other on the hip --
+    # contact per step plateaus around 0.35 against a one-handed ceiling of 0.5.
+    # Peak value is still `gain`, so the weight carries over unchanged.
+    eef_contact_exp: {weight: 0.0, enabled: false}
+    eef_contact_exp_both: {weight: 0.5, gain: 5.0, pos_sigma: 0.3, frc_sigma: 40.0, frc_thres: 10.0}
 
   task:
     paint_coverage_delta:
       weight: 400.0
 
-  # Unweighted mirror, not added to the return. Its episode-accumulated stat
-  # reads directly as the final coverage ratio, which is what the z-sweep plots.
+  # Read-only indicators. Divide the accumulated stat by episode_len for a
+  # per-step fraction; eef_contact_both is 0 unless BOTH hands are on.
   debug:
+    eef_contact_both:
+      weight: 1.0
+      enabled: false
     paint_coverage:
       weight: 1.0
       enabled: false

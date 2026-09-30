@@ -5,7 +5,7 @@ defaults:
   - base/hdmi-base
   - _self_
 
-name: G1WallPainting2Z
+name: G1WallPaintingMulti
 
 viewer:
   env_spacing: 5.0
@@ -17,7 +17,13 @@ robot:
   robot_type: g1_29dof_rubberhand-feet_sphere-eef_box-body_capsule
 
 command:
-  data_path: data/motion/data_for_sim/wall_painting2
+  # SMOKE TEST, not a meaningful task. floor_painting is a one-handed `attach`
+  # clip and the rectangle below is wall_painting2's reused twice, so the
+  # numbers mean nothing. The point is to exercise the N>1 code path -- the
+  # object_contact concat and the per-motion rectangle indexing -- before three
+  # real clips depend on it. Replace both lists with the real stand/bend/squat
+  # clips and their own rectangles when they exist.
+  data_path: ["data/motion/data_for_sim/(wall_painting2|floor_painting)"]
   root_body_name: "pelvis"
   object_asset_name: "roller"
   object_body_name:  "roller"
@@ -37,22 +43,18 @@ command:
     - [0.05, 0.0, 0.0]   # right
 
   # Wall-painting target region
-  target_region_path: "/home/mchang344/mj_ws/simbench/pipeline/task_info/wall_painting2/paint_target_rectangle.npz"
-  # Move the GOAL while the reference stays put. The demonstrated roller head
-  # sweeps z = 0.796 .. 1.649 m with the pelvis fixed at 0.809 m, so +-0.15 m
-  # is what a standing policy can reach WITHOUT changing posture. +-0.5 m is
-  # deliberately past that: it puts the target between 0.296 and 2.149 m, which
-  # needs a squat at the bottom and is out of reach at the top from a fixed
-  # stance. That is the point -- it measures where one posture stops working,
-  # which is the number that says whether the bend/squat clips are needed.
-  # Do not go past +-0.6: at -0.7 the target bottom passes through the floor.
+  target_region_path:
+    - "/home/mchang344/mj_ws/simbench/pipeline/task_info/wall_painting2/paint_target_rectangle.npz"
+    - "/home/mchang344/mj_ws/simbench/pipeline/task_info/wall_painting2/paint_target_rectangle.npz"
+  # Target-region position randomization in world coordinates [m].
   target_region_pos_range:
     x: [0.0, 0.0]
     y: [0.0, 0.0]
-    z: [-0.5, 0.5]
+    z: [0.0, 0.0]
+  # Target-region size randomization.
   target_region_scale_range:
     width: [1.0, 1.0]
-    height: [0.70, 1.40]
+    height: [1.0, 1.0]
   # Coarse coverage map given to the policy.
   coverage_grid_size: 4
 
@@ -61,22 +63,27 @@ observation:
     target_region_size: {}
     roller_head_uv: {}
     paint_coverage_grid: {}
-    # Where the target is relative to the root. roller_head_uv only becomes an
-    # error signal once the roller is already at the wall, which is not enough
-    # when the target itself moves. Comment out to run the ablation.
-    target_center_b: {}
 
 reward:
   object_tracking:
-    eef_contact_exp: {weight: 0.5}
+    # Product over the two hands instead of a mean, so a one-handed grip scores
+    # zero rather than half. The mean version lets the policy settle into
+    # holding the roller with one hand and parking the other on the hip --
+    # contact per step plateaus around 0.35 against a one-handed ceiling of 0.5.
+    # Peak value is still `gain`, so the weight carries over unchanged.
+    eef_contact_exp: {weight: 0.0, enabled: false}
+    eef_contact_exp_both: {weight: 0.5, gain: 5.0, pos_sigma: 0.3, frc_sigma: 40.0, frc_thres: 10.0}
 
   task:
     paint_coverage_delta:
       weight: 400.0
 
-  # Unweighted mirror, not added to the return. Its episode-accumulated stat
-  # reads directly as the final coverage ratio, which is what the z-sweep plots.
+  # Read-only indicators. Divide the accumulated stat by episode_len for a
+  # per-step fraction; eef_contact_both is 0 unless BOTH hands are on.
   debug:
+    eef_contact_both:
+      weight: 1.0
+      enabled: false
     paint_coverage:
       weight: 1.0
       enabled: false

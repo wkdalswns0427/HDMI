@@ -379,6 +379,15 @@ class RobotObjectTracking(RobotTracking):
             "width": (1.0, 1.0),
             "height": (1.0, 1.0),
         },
+        # Slide the target ALONG the wall. target_region_pos_range is a world
+        # xyz offset, so randomizing x or y there pushes the region off the
+        # wall plane; u/v move within it -- u along the in-plane horizontal,
+        # v vertically. Use this for "anywhere on the wall", and pos_range
+        # only when you really mean to move the plane itself.
+        target_region_uv_range: Dict[str, Tuple[float, float]] = {
+            "u": (0.0, 0.0),
+            "v": (0.0, 0.0),
+        },
         coverage_grid_size: int = 4,
         show_canvas: bool = True,
         paint_resolution: float = 0.005,
@@ -536,6 +545,17 @@ class RobotObjectTracking(RobotTracking):
             ]
             self.target_region_pos_range = torch.tensor(
                 pos_range_list,
+                dtype=torch.float32,
+                device=self.device,
+            )
+
+            # In-plane displacement range, in wall coordinates.
+            uv_range_list = [
+                target_region_uv_range.get(key, (0.0, 0.0))
+                for key in ["u", "v"]
+            ]
+            self.target_region_uv_range = torch.tensor(
+                uv_range_list,
                 dtype=torch.float32,
                 device=self.device,
             )
@@ -732,10 +752,23 @@ class RobotObjectTracking(RobotTracking):
 
         # NPZ coordinates correspond to the local world of one environment.
         # Add each parallel environment's origin.
+        # In-plane slide, so the region stays ON the wall.
+        uv_offset = sample_uniform(
+            self.target_region_uv_range[:, 0],
+            self.target_region_uv_range[:, 1],
+            (num_envs, 2),
+            device=self.device,
+        )
+        inplane = (
+            uv_offset[:, 0:1] * self.wall_axis_u_w.unsqueeze(0)
+            + uv_offset[:, 1:2] * self.wall_axis_v_w.unsqueeze(0)
+        )
+
         center_w = (
             self.nominal_target_center_w[mids]
             + self.env.scene.env_origins[env_ids]
             + pos_offset
+            + inplane
         )
 
         self.target_center_w[env_ids] = center_w
@@ -768,7 +801,7 @@ class RobotObjectTracking(RobotTracking):
             height / self.paint_resolution
         ).long().clamp(1, self.paint_grid_height)
 
-        self._place_canvas(env_ids, center_w)
+        self._place_canvas(env_ids)
 
         # Reset accumulated paint coverage for these environments.
         # During replay_motion, each demonstration frame is loaded through a reset,
@@ -779,13 +812,23 @@ class RobotObjectTracking(RobotTracking):
             self.coverage_delta[env_ids] = 0.0
             self.prev_head_valid[env_ids] = False
 
-    def _place_canvas(self, env_ids: torch.Tensor, center_w: torch.Tensor) -> None:
-        """Sit the canvas on the wall plane, centred on each env's target.
+    def _place_canvas(self, env_ids: torch.Tensor) -> None:
+        """Stand the wall on the ground, in the plane the target lives in.
 
-        The plate is authored in its local XY plane, so the rotation whose
-        columns are [axis_u, axis_v, normal] maps local X/Y/Z onto the wall's
-        horizontal, vertical and outward directions. normal = axis_u x axis_v
-        points back toward the human, which is the face that should be visible.
+        The wall is a fixed structure: the painted target is a region ON it and
+        moves with target randomization, but the wall itself does not follow.
+        A real wall does not slide up and down when the job does.
+
+        The prim origin is authored at the bottom edge, so grounding it is just
+        putting the origin at z = 0. Horizontally it sits under the nominal
+        target of motion 0 -- with clips shot in a fixed environment they all
+        share one wall plane, which is also what the axis_u/axis_v check at load
+        enforces.
+
+        The plate lies in its local XY plane, so the rotation whose columns are
+        [axis_u, axis_v, normal] maps local X/Y/Z onto the wall's horizontal,
+        vertical and outward directions. normal = axis_u x axis_v points back
+        toward the human, which is the face that should be visible.
         """
         if self.canvas is None:
             return
@@ -796,7 +839,11 @@ class RobotObjectTracking(RobotTracking):
         rot = torch.stack([self.wall_axis_u_w, self.wall_axis_v_w, normal], dim=-1)
         quat = quat_from_matrix(rot).unsqueeze(0).expand(len(env_ids), -1)
 
-        pose = torch.cat([center_w, quat], dim=-1)
+        base = self.nominal_target_center_w[0].clone()
+        base[2] = 0.0                                   # origin = bottom edge
+        pos = base.unsqueeze(0) + self.env.scene.env_origins[env_ids]
+
+        pose = torch.cat([pos, quat], dim=-1)
         self.canvas.write_root_link_pose_to_sim(pose, env_ids=env_ids)
         self.canvas.write_root_com_velocity_to_sim(
             torch.zeros(len(env_ids), 6, device=self.device), env_ids=env_ids
