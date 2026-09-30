@@ -11,12 +11,15 @@
 # separate on purpose -- GVHMR and IsaacSim do not share a dependency set.
 set -euo pipefail
 
-ROOT=/home/mchang344/mj_ws/simbench
-PIPE=$ROOT/pipeline
+PIPE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # this script's dir
+HDMI_ROOT="$(dirname "$PIPE")"                             # the HDMI checkout
+SIMBENCH="${SIMBENCH_ROOT:-$(dirname "$HDMI_ROOT")}"       # holds GVHMR/, GMR/, loco-mujoco/
+CONDA="${CONDA_ROOT:-$HOME/miniconda3}"
+ROOT=$SIMBENCH
 export PYTHONNOUSERSITE=1   # ~/.local holds 4GB of py310 pkgs that shadow envs
 
-PY_GVHMR=/home/mchang344/miniconda3/envs/gvhmr/bin/python
-PY_GMR=/home/mchang344/miniconda3/envs/gmr/bin/python
+PY_GVHMR=$CONDA/envs/gvhmr/bin/python
+PY_GMR=$CONDA/envs/gmr/bin/python
 
 VIDEO=${1:?usage: run_pipeline.sh <video.mp4> <task_name> [robot] [object_name]}
 TASK=${2:?usage: run_pipeline.sh <video.mp4> <task_name> [robot] [object_name]}
@@ -30,7 +33,7 @@ STAGE=${STAGE:-all}
 STATIC_CAM=${STATIC_CAM:-1}
 
 WORK=$PIPE/work/$TASK
-MOTION=$ROOT/HDMI/data/motion/data_for_sim/$TASK
+MOTION=$HDMI_ROOT/data/motion/data_for_sim/$TASK
 ANN=$PIPE/annotations/$TASK.json
 mkdir -p "$WORK"
 
@@ -83,7 +86,7 @@ $PY_GMR "$PIPE/scripts/gmr_to_hdmi.py" \
     --out_dir "$MOTION" --annotation "$ANN" --target_fps 50
 
 $PY_GMR "$PIPE/scripts/validate_motion.py" "$MOTION" \
-    --reference "$ROOT/HDMI/data/motion/data_for_sim/carry_and_place_bread_box-0829"
+    --reference "$HDMI_ROOT/data/motion/data_for_sim/carry_and_place_bread_box-0829"
 
 echo "################ [6/6] task config ################"
 CAMEL=$($PY_GMR -c "import sys;print(''.join(w.capitalize() for w in sys.argv[1].split('_')))" "$TASK")
@@ -95,7 +98,7 @@ cat <<MSG
 
 Done. Before burning GPU hours, replay the reference in Isaac Sim:
 
-  cd $ROOT/HDMI
+  cd $HDMI_ROOT
   conda activate hdmi
   python scripts/play.py algo=ppo_roa_train task=<R>/hdmi/$TASK +task.command.replay_motion=true
 

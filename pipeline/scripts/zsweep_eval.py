@@ -22,8 +22,13 @@ import re
 import subprocess
 from pathlib import Path
 
-HDMI = Path("/home/mchang344/mj_ws/simbench/HDMI")
-PY = "/home/mchang344/miniconda3/envs/hdmi/bin/python"
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+from hdmi_pipeline import paths
+
+HDMI = paths.HDMI_ROOT
+PY = paths.conda_python("hdmi")
 
 # The stat play.py prints for the unweighted mirror term.
 STAT = re.compile(r"\('stats', 'debug', 'paint_coverage'\)\s+([\d.eE+-]+)")

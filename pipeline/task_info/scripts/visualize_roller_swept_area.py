@@ -18,20 +18,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-MOTION_PATH = Path(
-    "/home/mchang344/mj_ws/simbench/HDMI/"
-    "data/motion/data_for_sim/wall_painting2/motion.npz"
-)
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+from hdmi_pipeline import paths
 
-OUTPUT_PATH = Path(
-    "/home/mchang344/mj_ws/simbench/pipeline/task_info/wall_painting2/"
-    "roller_head_swept_3d.png"
-)
-
-TRAJECTORY_PATH = Path(
-    "/home/mchang344/mj_ws/simbench/pipeline/task_info/wall_painting2/"
-    "roller_head_trajectory.npz"
-)
+MOTION_PATH = paths.MOTION_DATA / "wall_painting2" / "motion.npz"
+OUTPUT_PATH = paths.TASK_INFO / "wall_painting2" / "roller_head_swept_3d.png"
+TRAJECTORY_PATH = paths.TASK_INFO / "wall_painting2" / "roller_head_trajectory.npz"
 
 UNITREE_BODY_NAMES = [
     "pelvis",

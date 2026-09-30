@@ -27,6 +27,11 @@ _ap.add_argument("--mass", type=float, default=2.5)
 ARGS, _rest = _ap.parse_known_args()
 sys.argv = [sys.argv[0]]
 
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+from hdmi_pipeline import paths
+
 from isaaclab.app import AppLauncher
 
 app = AppLauncher(headless=True).app
@@ -34,8 +39,7 @@ app = AppLauncher(headless=True).app
 from pxr import Usd, UsdGeom, UsdPhysics, Gf, Sdf
 
 NAME = ARGS.name
-OUT = ("/home/mchang344/mj_ws/simbench/HDMI/active_adaptation/assets/"
-       f"objects/{NAME}/{NAME}.usd")
+OUT = str(paths.ASSETS / "objects" / NAME / f"{NAME}.usd")
 RADIUS, HEIGHT, MASS = ARGS.radius, ARGS.height, ARGS.mass
 
 import os

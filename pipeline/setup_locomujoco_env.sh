@@ -11,11 +11,14 @@
 # task, which came from OMOMO rather than from video.
 set -euo pipefail
 
-CONDA=/home/mchang344/miniconda3
+PIPE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # this script's dir
+HDMI_ROOT="$(dirname "$PIPE")"                             # the HDMI checkout
+SIMBENCH="${SIMBENCH_ROOT:-$(dirname "$HDMI_ROOT")}"       # holds GVHMR/, GMR/, loco-mujoco/
+CONDA="${CONDA_ROOT:-$HOME/miniconda3}"
 ENV=locomujoco
 PIP=$CONDA/envs/$ENV/bin/pip
 PY=$CONDA/envs/$ENV/bin/python
-REPO=/home/mchang344/mj_ws/simbench/loco-mujoco
+REPO="$SIMBENCH/loco-mujoco"
 export PYTHONNOUSERSITE=1
 
 if [ ! -x "$PY" ]; then

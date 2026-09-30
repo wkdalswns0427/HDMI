@@ -10,8 +10,12 @@ The only clean fix is a base the H1-2 tasks inherit instead.
 Re-run this whenever hdmi-base.yaml changes.
 """
 import pathlib
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+from hdmi_pipeline import paths
 
-BASE = pathlib.Path("/home/mchang344/mj_ws/simbench/HDMI/cfg/task/base")
+BASE = paths.TASK_CFG / "base"
 
 def main():
     s = (BASE / "hdmi-base.yaml").read_text()

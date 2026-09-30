@@ -50,7 +50,7 @@ The interesting tension: tracking says "be the worker", coverage says "paint the
     export TASK=wall_painting2
     export ROBOT=unitree_g1
     export MOTION=$SB/HDMI/data/motion/data_for_sim/$TASK
-    export WORK=$SB/pipeline/work/$TASK
+    export WORK=$SB/HDMI/pipeline/work/$TASK
     mkdir -p "$WORK"
     ```
 
@@ -70,15 +70,15 @@ The interesting tension: tracking says "be the worker", coverage says "paint the
 
     ```jsx
     cd $SB/GVHMR
-    PYTHONNOUSERSITE=1 $PY_GVHMR $SB/pipeline/scripts/render_smpl.py \
+    PYTHONNOUSERSITE=1 $PY_GVHMR $SB/HDMI/pipeline/scripts/render_smpl.py \
       "outputs/demo/wall_painting2/hmr4d_results.pt" \
-      -o $SB/pipeline/wall_painting2_human.mp4
+      -o $SB/HDMI/pipeline/wall_painting2_human.mp4
     ```
 
 - **Stage 2: Retarget joints**
 
     ```jsx
-    cd $SB/pipeline
+    cd $SB/HDMI/pipeline
     PYTHONNOUSERSITE=1 $PY_GMR scripts/gvhmr_to_gmr.py \
       --gvhmr_pred "$PRED" --robot $ROBOT --video "$CLIP" \
       --save_path "$WORK/$TASK.pkl"
@@ -87,7 +87,7 @@ The interesting tension: tracking says "be the worker", coverage says "paint the
 - **Stage 3: Forward Kinematic solve validate**
 
     ```jsx
-    PYTHONNOUSERSITE=1 $PY_GMR $SB/pipeline/scripts/gmr_to_hdmi.py \
+    PYTHONNOUSERSITE=1 $PY_GMR $SB/HDMI/pipeline/scripts/gmr_to_hdmi.py \
       --gmr_pkl "$WORK/$TASK.pkl" --robot $ROBOT \
       --out_dir "$MOTION" --target_fps 50
     // 342 frames @ 50 fps (6.84s), 28 bodies -- no object yet
@@ -119,7 +119,7 @@ The interesting tension: tracking says "be the worker", coverage says "paint the
     **6.1 — author the asset.** Same nested-same-name USD layout constraint as the shovel: `/roller` Xform → `/roller/roller` rigid body → collision children, because `object_body_name` is used both as a prim path and as `body_names.index()`.
 
     ```jsx
-    $PY_HDMI $SB/pipeline/scripts/make_roller_usd.py
+    $PY_HDMI $SB/HDMI/pipeline/scripts/make_roller_usd.py
     // defaultPrim: /roller
     //   /roller/roller              APIs=['RigidBodyAPI','MassAPI']   mass 2.5
     //   /roller/roller/pole         Capsule   r=0.0209, 1.0 m, axis z
@@ -185,7 +185,7 @@ The interesting tension: tracking says "be the worker", coverage says "paint the
 
     ```jsx
     PYTHONNOUSERSITE=1 $PY_GMR scripts/render_motion.py "$MOTION" \
-      --robot unitree_g1 -o $SB/pipeline/wall_painting2_gmr.mp4
+      --robot unitree_g1 -o $SB/HDMI/pipeline/wall_painting2_gmr.mp4
 
     PYTHONNOUSERSITE=1 $PY_GMR scripts/make_task_cfg.py \
       --motion_dir "$MOTION" --annotation annotations/wall_painting2.json \
@@ -224,17 +224,17 @@ The interesting tension: tracking says "be the worker", coverage says "paint the
     Shovel has no equivalent. The goal — a rectangle of wall to cover — is not in the demonstration, so it has to be recovered from where the roller actually went. Three scripts in `pipeline/task_info/scripts/`, run in order.
 
     ```jsx
-    PYTHONNOUSERSITE=1 $PY_GMR $SB/pipeline/task_info/scripts/visualize_roller_swept_area.py
+    PYTHONNOUSERSITE=1 $PY_GMR $SB/HDMI/pipeline/task_info/scripts/visualize_roller_swept_area.py
     // re-derives the two_hand roller pose from both wrist links and writes the
     // head centreline endpoints per frame -> roller_head_trajectory.npz  (342 frames)
 
-    PYTHONNOUSERSITE=1 $PY_GMR $SB/pipeline/task_info/scripts/fit_roller_plane.py
+    PYTHONNOUSERSITE=1 $PY_GMR $SB/HDMI/pipeline/task_info/scripts/fit_roller_plane.py
     // SVD plane through 25 samples per roller line, normal_z forced to 0 (vertical
     // wall), then pushed one roller radius AWAY from the human so it is the wall
     // surface rather than the roller axis -> roller_fitted_plane.npz
     //   rmse 0.0307 m   p95 0.0600 m   normal [0.8787, 0.4774, 0]
 
-    PYTHONNOUSERSITE=1 $PY_GMR $SB/pipeline/task_info/scripts/target_area.py
+    PYTHONNOUSERSITE=1 $PY_GMR $SB/HDMI/pipeline/task_info/scripts/target_area.py
     // axis-aligned bbox of all projected endpoints -> paint_target_rectangle.npz
     //   0.6025 x 0.8529 m, centre [-0.7214, -0.2603, 1.2228], z 0.796 .. 1.649
     ```
@@ -443,7 +443,7 @@ Run 3 (more frames on the mean reward) converged: its last 320 iterations moved 
 Renders showed the robot painting empty air, because nothing in the scene represented the wall. There is now a canvas prim.
 
 ```jsx
-$PY_HDMI $SB/pipeline/scripts/make_canvas_usd.py
+$PY_HDMI $SB/HDMI/pipeline/scripts/make_canvas_usd.py
 // reads the task's paint_target_rectangle.npz, authors a plate of that size
 // plus a margin -> 0.9025 x 1.1529 m for wall_painting2 (0.15 m each side)
 ```

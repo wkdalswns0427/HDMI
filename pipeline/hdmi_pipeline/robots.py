@@ -11,7 +11,9 @@ object to a link (a rubber hand, say) that is not itself written to the file.
 from __future__ import annotations
 from pathlib import Path
 
-GMR_ASSETS = Path("/home/mchang344/mj_ws/simbench/GMR/assets")
+from .paths import GMR_ROOT
+
+GMR_ASSETS = GMR_ROOT / "assets"
 
 G1_JOINTS = [
     "left_hip_pitch_joint", "left_hip_roll_joint", "left_hip_yaw_joint",

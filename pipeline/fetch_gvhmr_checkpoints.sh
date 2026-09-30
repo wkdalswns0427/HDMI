@@ -7,10 +7,14 @@
 # Everything else comes from the authors' Google Drive folder.
 set -euo pipefail
 
-GVHMR=/home/mchang344/mj_ws/simbench/GVHMR
-GMR_BODY=/home/mchang344/mj_ws/simbench/GMR/assets/body_models
-PY=/home/mchang344/miniconda3/envs/gvhmr/bin/python
-PIP=/home/mchang344/miniconda3/envs/gvhmr/bin/pip
+PIPE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # this script's dir
+HDMI_ROOT="$(dirname "$PIPE")"                             # the HDMI checkout
+SIMBENCH="${SIMBENCH_ROOT:-$(dirname "$HDMI_ROOT")}"       # holds GVHMR/, GMR/, loco-mujoco/
+CONDA="${CONDA_ROOT:-$HOME/miniconda3}"
+GVHMR="${GVHMR_ROOT:-$SIMBENCH/GVHMR}"
+GMR_BODY="${GMR_ROOT:-$SIMBENCH/GMR}/assets/body_models"
+PY=$CONDA/envs/gvhmr/bin/python
+PIP=$CONDA/envs/gvhmr/bin/pip
 export PYTHONNOUSERSITE=1
 
 CKPT=$GVHMR/inputs/checkpoints

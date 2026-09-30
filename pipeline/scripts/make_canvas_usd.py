@@ -24,13 +24,16 @@ paths and body indices from the same name.
 """
 
 import argparse, sys
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+from hdmi_pipeline import paths
 
 _ap = argparse.ArgumentParser(add_help=False)
 _ap.add_argument("--name", default="canvas")
 _ap.add_argument(
     "--target",
-    default="/home/mchang344/mj_ws/simbench/pipeline/task_info/"
-            "wall_painting2/paint_target_rectangle.npz",
+    default=str(paths.TASK_INFO / "wall_painting2" / "paint_target_rectangle.npz"),
     help="paint_target_rectangle.npz to take width/height from",
 )
 _ap.add_argument("--thickness", type=float, default=0.04)
@@ -54,8 +57,7 @@ import numpy as np
 from pxr import Usd, UsdGeom, UsdPhysics, Gf
 
 NAME = ARGS.name
-OUT = ("/home/mchang344/mj_ws/simbench/HDMI/active_adaptation/assets/"
-       f"objects/{NAME}/{NAME}.usd")
+OUT = str(paths.ASSETS / "objects" / NAME / f"{NAME}.usd")
 
 data = np.load(ARGS.target, allow_pickle=True)
 target_w = float(np.asarray(data["width"]).squeeze())

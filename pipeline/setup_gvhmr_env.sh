@@ -4,11 +4,14 @@
 # move to cu128 wheels and compile pytorch3d from source for arch 12.0.
 set -euo pipefail
 
-CONDA=/home/mchang344/miniconda3
+PIPE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # this script's dir
+HDMI_ROOT="$(dirname "$PIPE")"                             # the HDMI checkout
+SIMBENCH="${SIMBENCH_ROOT:-$(dirname "$HDMI_ROOT")}"       # holds GVHMR/, GMR/, loco-mujoco/
+CONDA="${CONDA_ROOT:-$HOME/miniconda3}"
 ENV=gvhmr
 PY=$CONDA/envs/$ENV/bin/python
 PIP=$CONDA/envs/$ENV/bin/pip
-GVHMR=/home/mchang344/mj_ws/simbench/GVHMR
+GVHMR="${GVHMR_ROOT:-$SIMBENCH/GVHMR}"
 
 export CUDA_HOME=/usr/local/cuda-12.8
 export PATH=$CUDA_HOME/bin:$PATH
@@ -53,7 +56,7 @@ $PIP install --no-cache-dir -e $GVHMR --no-deps
 
 # torch>=2.6 weights_only shim (GVHMR reads its own .pt artifacts + official
 # ckpts containing numpy arrays). Only bites on the non-static-camera path.
-bash /home/mchang344/mj_ws/simbench/pipeline/patch_gvhmr_torch26.sh
+bash "$PIPE/patch_gvhmr_torch26.sh"
 
 echo "=== [6/6] verify ==="
 $PY - <<'PYEOF'

@@ -25,7 +25,7 @@ Supported robots: `unitree_g1` (29 dof), `unitree_h1_2` (27 dof).
 One-time. Both scripts are idempotent — safe to re-run.
 
 ```bash
-cd ~/mj_ws/simbench/pipeline
+cd ~/mj_ws/simbench/HDMI/pipeline
 
 ./setup_gvhmr_env.sh            # builds the `gvhmr` conda env (~30 min: pytorch3d compiles)
 ./fetch_gvhmr_checkpoints.sh    # ~5 GB of weights
@@ -64,7 +64,7 @@ annotation is manual by design.
 ## 2a. The driver
 
 ```bash
-cd ~/mj_ws/simbench/pipeline
+cd ~/mj_ws/simbench/HDMI/pipeline
 
 ./run_pipeline.sh /abs/path/clip.mp4 move_suitcase unitree_g1
 # ... runs stages 1-3, then STOPS with an annotation template ...
@@ -109,8 +109,8 @@ export OBJECT=box                     # must be a registry asset (see §6)
 export NAME=PushBox                   # CamelCase
 
 export MOTION=$SB/HDMI/data/motion/data_for_sim/$TASK
-export WORK=$SB/pipeline/work/$TASK
-export ANN=$SB/pipeline/annotations/$TASK.json
+export WORK=$SB/HDMI/pipeline/work/$TASK
+export ANN=$SB/HDMI/pipeline/annotations/$TASK.json
 mkdir -p "$WORK"
 
 # ---------- part 1: stages 1-4 ----------
@@ -121,20 +121,20 @@ export PRED=$SB/GVHMR/outputs/demo/$(basename "${CLIP%.*}")/hmr4d_results.pt
 test -f "$PRED" && echo "OK: $PRED"
 
 # [2] SMPL-X -> robot qpos   (--video detects true fps)
-PYTHONNOUSERSITE=1 $PY_GMR $SB/pipeline/scripts/gvhmr_to_gmr.py \
+PYTHONNOUSERSITE=1 $PY_GMR $SB/HDMI/pipeline/scripts/gvhmr_to_gmr.py \
   --gvhmr_pred "$PRED" --robot $ROBOT --video "$CLIP" \
   --save_path $WORK/$TASK.pkl
 
 # [3] FK -> HDMI motion (robot only) + validate
-PYTHONNOUSERSITE=1 $PY_GMR $SB/pipeline/scripts/gmr_to_hdmi.py \
+PYTHONNOUSERSITE=1 $PY_GMR $SB/HDMI/pipeline/scripts/gmr_to_hdmi.py \
   --gmr_pkl $WORK/$TASK.pkl --robot $ROBOT \
   --out_dir $MOTION --target_fps 50
 
-PYTHONNOUSERSITE=1 $PY_GMR $SB/pipeline/scripts/validate_motion.py $MOTION \
+PYTHONNOUSERSITE=1 $PY_GMR $SB/HDMI/pipeline/scripts/validate_motion.py $MOTION \
   --reference $SB/HDMI/data/motion/data_for_sim/carry_and_place_bread_box-0829
 
 # [4] annotation template
-PYTHONNOUSERSITE=1 $PY_GMR $SB/pipeline/scripts/make_annotation.py $MOTION \
+PYTHONNOUSERSITE=1 $PY_GMR $SB/HDMI/pipeline/scripts/make_annotation.py $MOTION \
   --object $OBJECT --out "$ANN"
 
 echo; echo ">>> Now edit $ANN against the video, then paste part 2."
@@ -143,18 +143,18 @@ echo; echo ">>> Now edit $ANN against the video, then paste part 2."
 ```bash
 # ---------- part 2: stages 5-7 ----------
 # [5] repack with object + contact
-PYTHONNOUSERSITE=1 $PY_GMR $SB/pipeline/scripts/gmr_to_hdmi.py \
+PYTHONNOUSERSITE=1 $PY_GMR $SB/HDMI/pipeline/scripts/gmr_to_hdmi.py \
   --gmr_pkl $WORK/$TASK.pkl --robot $ROBOT \
   --out_dir $MOTION --annotation "$ANN" --target_fps 50
 
-PYTHONNOUSERSITE=1 $PY_GMR $SB/pipeline/scripts/validate_motion.py $MOTION
+PYTHONNOUSERSITE=1 $PY_GMR $SB/HDMI/pipeline/scripts/validate_motion.py $MOTION
 
 # [6] preview — object must be green exactly while held
-PYTHONNOUSERSITE=1 $PY_GMR $SB/pipeline/scripts/render_motion.py $MOTION \
+PYTHONNOUSERSITE=1 $PY_GMR $SB/HDMI/pipeline/scripts/render_motion.py $MOTION \
   --robot $ROBOT -o $WORK/preview.mp4
 
 # [7] task config
-PYTHONNOUSERSITE=1 $PY_GMR $SB/pipeline/scripts/make_task_cfg.py \
+PYTHONNOUSERSITE=1 $PY_GMR $SB/HDMI/pipeline/scripts/make_task_cfg.py \
   --motion_dir $MOTION --annotation "$ANN" --name $NAME --robot g1
 ```
 
@@ -205,11 +205,11 @@ ls -lh "$PRED"
 ## Stage 2 — retarget to the robot
 
 ```bash
-PYTHONNOUSERSITE=1 $PY_GMR $SB/pipeline/scripts/gvhmr_to_gmr.py \
+PYTHONNOUSERSITE=1 $PY_GMR $SB/HDMI/pipeline/scripts/gvhmr_to_gmr.py \
   --gvhmr_pred "$PRED" \
   --robot $ROBOT \
   --video "$CLIP" \
-  --save_path $SB/pipeline/work/$TASK/$TASK.pkl
+  --save_path $SB/HDMI/pipeline/work/$TASK/$TASK.pkl
 ```
 
 Pass `--video` so the true frame rate is detected. GMR's loader hardcodes
@@ -221,13 +221,13 @@ clip would otherwise retarget at **half speed with wrong velocities**. If the
 ## Stage 3 — FK → HDMI motion (robot only)
 
 ```bash
-PYTHONNOUSERSITE=1 $PY_GMR $SB/pipeline/scripts/gmr_to_hdmi.py \
-  --gmr_pkl $SB/pipeline/work/$TASK/$TASK.pkl \
+PYTHONNOUSERSITE=1 $PY_GMR $SB/HDMI/pipeline/scripts/gmr_to_hdmi.py \
+  --gmr_pkl $SB/HDMI/pipeline/work/$TASK/$TASK.pkl \
   --robot $ROBOT \
   --out_dir $SB/HDMI/data/motion/data_for_sim/$TASK \
   --target_fps 50
 
-PYTHONNOUSERSITE=1 $PY_GMR $SB/pipeline/scripts/validate_motion.py \
+PYTHONNOUSERSITE=1 $PY_GMR $SB/HDMI/pipeline/scripts/validate_motion.py \
   $SB/HDMI/data/motion/data_for_sim/$TASK \
   --reference $SB/HDMI/data/motion/data_for_sim/carry_and_place_bread_box-0829
 ```
@@ -238,12 +238,12 @@ the HDMI repo root.
 ## Stage 4 — annotate the object (manual)
 
 ```bash
-PYTHONNOUSERSITE=1 $PY_GMR $SB/pipeline/scripts/make_annotation.py \
+PYTHONNOUSERSITE=1 $PY_GMR $SB/HDMI/pipeline/scripts/make_annotation.py \
   $SB/HDMI/data/motion/data_for_sim/$TASK \
   --object box \
-  --out $SB/pipeline/annotations/$TASK.json
+  --out $SB/HDMI/pipeline/annotations/$TASK.json
 
-nano $SB/pipeline/annotations/$TASK.json
+nano $SB/HDMI/pipeline/annotations/$TASK.json
 ```
 
 It prints per-wrist height/speed sparklines and guesses a carry window. **Always
@@ -257,14 +257,14 @@ because FK runs over a superset of the bodies actually written to the file.
 ## Stage 5 — repack with object + contact
 
 ```bash
-PYTHONNOUSERSITE=1 $PY_GMR $SB/pipeline/scripts/gmr_to_hdmi.py \
-  --gmr_pkl $SB/pipeline/work/$TASK/$TASK.pkl \
+PYTHONNOUSERSITE=1 $PY_GMR $SB/HDMI/pipeline/scripts/gmr_to_hdmi.py \
+  --gmr_pkl $SB/HDMI/pipeline/work/$TASK/$TASK.pkl \
   --robot $ROBOT \
   --out_dir $SB/HDMI/data/motion/data_for_sim/$TASK \
-  --annotation $SB/pipeline/annotations/$TASK.json \
+  --annotation $SB/HDMI/pipeline/annotations/$TASK.json \
   --target_fps 50
 
-PYTHONNOUSERSITE=1 $PY_GMR $SB/pipeline/scripts/validate_motion.py \
+PYTHONNOUSERSITE=1 $PY_GMR $SB/HDMI/pipeline/scripts/validate_motion.py \
   $SB/HDMI/data/motion/data_for_sim/$TASK
 ```
 
@@ -273,10 +273,10 @@ Same command as stage 3 plus `--annotation`. Iterate 4↔5 until it's right.
 ## Stage 6 — look at it
 
 ```bash
-PYTHONNOUSERSITE=1 $PY_GMR $SB/pipeline/scripts/render_motion.py \
+PYTHONNOUSERSITE=1 $PY_GMR $SB/HDMI/pipeline/scripts/render_motion.py \
   $SB/HDMI/data/motion/data_for_sim/$TASK \
   --robot $ROBOT \
-  -o $SB/pipeline/work/$TASK/preview.mp4
+  -o $SB/HDMI/pipeline/work/$TASK/preview.mp4
 ```
 
 The object must turn **green** exactly while the hand is on it. That is the
@@ -285,9 +285,9 @@ annotation verified. Do this before spending GPU hours.
 ## Stage 7 — task config
 
 ```bash
-PYTHONNOUSERSITE=1 $PY_GMR $SB/pipeline/scripts/make_task_cfg.py \
+PYTHONNOUSERSITE=1 $PY_GMR $SB/HDMI/pipeline/scripts/make_task_cfg.py \
   --motion_dir $SB/HDMI/data/motion/data_for_sim/$TASK \
-  --annotation $SB/pipeline/annotations/$TASK.json \
+  --annotation $SB/HDMI/pipeline/annotations/$TASK.json \
   --name PushBox \
   --robot g1
 ```
@@ -303,7 +303,7 @@ still a useful task: pure whole-body motion tracking. `--mode auto` detects this
 and emits a `tracking` config instead:
 
 ```bash
-PYTHONNOUSERSITE=1 $PY_GMR $SB/pipeline/scripts/make_task_cfg.py \
+PYTHONNOUSERSITE=1 $PY_GMR $SB/HDMI/pipeline/scripts/make_task_cfg.py \
   --motion_dir $MOTION --name ShovelDirt --robot g1
 # [mode] auto -> tracking (no object bodies)
 # writes HDMI/cfg/task/G1/tracking/shovel_dirt.yaml

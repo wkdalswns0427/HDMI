@@ -28,15 +28,13 @@ from matplotlib.patches import Rectangle
 # Paths
 # ============================================================
 
-INPUT_PATH = Path(
-    "/home/mchang344/mj_ws/simbench/pipeline/task_info/"
-    "wall_painting2/roller_fitted_plane.npz"
-)
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+from hdmi_pipeline import paths
 
-OUTPUT_PATH = Path(
-    "/home/mchang344/mj_ws/simbench/pipeline/task_info/"
-    "wall_painting2/paint_target_rectangle.npz"
-)
+INPUT_PATH = paths.TASK_INFO / "wall_painting2" / "roller_fitted_plane.npz"
+OUTPUT_PATH = paths.TASK_INFO / "wall_painting2" / "paint_target_rectangle.npz"
 
 
 # ============================================================

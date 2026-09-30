@@ -28,12 +28,18 @@ import torch
 from tqdm import tqdm
 
 
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+from hdmi_pipeline import paths
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("pred", help="hmr4d_results.pt from GVHMR")
     p.add_argument("-o", "--out", default=None, help="output mp4")
-    p.add_argument("--gvhmr_root", default="/home/mchang344/mj_ws/simbench/GVHMR")
+    p.add_argument("--gvhmr_root", default=str(paths.GVHMR_ROOT))
     p.add_argument("--fps", type=int, default=30, help="GVHMR predicts at video fps")
     p.add_argument("--width", type=int, default=1280)
     p.add_argument("--height", type=int, default=720)

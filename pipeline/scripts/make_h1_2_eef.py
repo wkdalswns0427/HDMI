@@ -31,12 +31,17 @@ _ap.add_argument("--offset", type=float, default=0.025)   # along +X, forearm ou
 ARGS, _ = _ap.parse_known_args()
 sys.argv = [sys.argv[0]]
 
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+from hdmi_pipeline import paths
+
 from isaaclab.app import AppLauncher
 app = AppLauncher(headless=True).app
 
 from pxr import Usd, UsdGeom, UsdPhysics, Gf
 
-ASSETS = "/home/mchang344/mj_ws/simbench/HDMI/active_adaptation/assets/h1_2"
+ASSETS = str(paths.ASSETS / "h1_2")
 SRC = f"{ASSETS}/h1_2_handless.usd"
 OUT = f"{ASSETS}/{ARGS.name}.usd"
 

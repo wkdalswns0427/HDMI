@@ -11,7 +11,11 @@
 # Idempotent: safe to re-run.
 set -euo pipefail
 
-INIT=/home/mchang344/mj_ws/simbench/GVHMR/hmr4d/__init__.py
+PIPE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # this script's dir
+HDMI_ROOT="$(dirname "$PIPE")"                             # the HDMI checkout
+SIMBENCH="${SIMBENCH_ROOT:-$(dirname "$HDMI_ROOT")}"       # holds GVHMR/, GMR/, loco-mujoco/
+CONDA="${CONDA_ROOT:-$HOME/miniconda3}"
+INIT="${GVHMR_ROOT:-$SIMBENCH/GVHMR}/hmr4d/__init__.py"
 MARK="# --- torch>=2.6 weights_only shim"
 
 if grep -q "$MARK" "$INIT"; then
