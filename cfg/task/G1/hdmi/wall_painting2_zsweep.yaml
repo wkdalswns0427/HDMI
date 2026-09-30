@@ -37,7 +37,7 @@ command:
     - [0.05, 0.0, 0.0]   # right
 
   # Wall-painting target region
-  target_region_path: "/home/mchang344/mj_ws/simbench/pipeline/task_info/wall_painting2/paint_target_rectangle.npz"
+  target_region_path: "pipeline/task_info/wall_painting2/paint_target_rectangle.npz"
   # Move the GOAL while the reference stays put. The demonstrated roller head
   # sweeps z = 0.796 .. 1.649 m with the pelvis fixed at 0.809 m, so +-0.15 m
   # is what a standing policy can reach WITHOUT changing posture. +-0.5 m is

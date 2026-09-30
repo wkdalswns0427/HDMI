@@ -37,7 +37,7 @@ command:
     - [0.05, 0.0, 0.0]   # right
 
   # Wall-painting target region
-  target_region_path: "/home/mchang344/mj_ws/simbench/pipeline/task_info/wall_painting2/paint_target_rectangle.npz"
+  target_region_path: "pipeline/task_info/wall_painting2/paint_target_rectangle.npz"
   # Goal-conditioned: the region to paint moves and resizes on the wall, and
   # the reference motion does not change. This is the setup that asks whether
   # the coverage objective buys anything the demonstration alone cannot.

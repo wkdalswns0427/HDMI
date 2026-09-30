@@ -1,0 +1,61 @@
+{
+  "_comment": [
+    "Object annotation for HDMI. Frame indices are on the RESAMPLED timeline (389 frames @ 50.0 fps).",
+    "Frames below are heuristic guesses -- verify against the source video.",
+    "modes: static (fixed pose) | lerp (move between poses) | attach (ride a link)"
+  ],
+  "object": {
+    "name": "roller",
+    "asset": "roller"
+  },
+  "extra_objects": [],
+  "segments": [
+    {
+      "start": 0,
+      "end": 292,
+      "mode": "static",
+      "pos": [
+        0.256,
+        -0.045,
+        0.15
+      ],
+      "quat": [
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "start": 293,
+      "end": 387,
+      "mode": "attach",
+      "parent": "left_wrist_yaw_link"
+    },
+    {
+      "start": 388,
+      "end": 388,
+      "mode": "static",
+      "pos": [
+        0.464,
+        0.04,
+        0.15
+      ],
+      "quat": [
+        1,
+        0,
+        0,
+        0
+      ]
+    }
+  ],
+  "contact": [
+    [
+      293,
+      387
+    ]
+  ],
+  "smoothing": {
+    "window": 9
+  }
+}

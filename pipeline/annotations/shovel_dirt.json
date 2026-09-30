@@ -1,0 +1,64 @@
+{
+  "_comment": [
+    "shovel_dirt: two-handed tool. `two_hand` runs the shaft axis between both grip",
+    "links so it tracks the hands as their relative pose drifts (0.138 m over the clip).",
+    "",
+    "grip_offset is DELIBERATELY ABSENT here. Setting it to [0.127,0,-0.027] (the eef_L",
+    "pocket) is anatomically correct but puts the 2.5 kg shovel on a 0.13 m lever arm,",
+    "which an open end-effector cannot hold: contact-loss rate went 0.0019 -> 0.0150 per",
+    "step and episode length 137.8 -> 40.5. See runs iqaq9t50 (eef_L) and 23-02-28.",
+    "",
+    "Re-enable grip_offset once a dedicated hand CAPTURES the shaft rather than resting",
+    "it. Set it to the centre of that hand's collar, then re-derive axis_offset and both",
+    "contact offsets from the resulting grip span (scripts in pipeline/, see README 5)."
+  ],
+  "object": {
+    "name": "shovel",
+    "asset": "shovel"
+  },
+  "extra_objects": [],
+  "segments": [
+    {
+      "start": 0,
+      "end": 525,
+      "mode": "two_hand",
+      "parent_a": "right_wrist_yaw_link",
+      "parent_b": "left_wrist_yaw_link",
+      "axis_offset": 0.069,
+      "local_axis": "z"
+    }
+  ],
+  "contact": [
+    [
+      0,
+      525
+    ]
+  ],
+  "smoothing": {
+    "window": 5
+  },
+  "contact_target_pos_offset": [
+    [
+      0.0,
+      0.0,
+      0.369
+    ],
+    [
+      0.0,
+      0.0,
+      -0.069
+    ]
+  ],
+  "contact_eef_pos_offset": [
+    [
+      0.05,
+      0.0,
+      0.0
+    ],
+    [
+      0.05,
+      0.0,
+      0.0
+    ]
+  ]
+}

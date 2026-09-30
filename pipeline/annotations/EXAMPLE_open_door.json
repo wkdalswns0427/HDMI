@@ -1,0 +1,19 @@
+{
+  "_comment": [
+    "Worked example: articulated object (a door) opened by hand.",
+    "Frame indices are on the RESAMPLED 50 fps timeline.",
+    "The door panel does not travel, so its body pose is static; the SWING",
+    "lives in the articulation joint, exactly as HDMI's shipped door data does",
+    "(joint_names gains 'door_joint', joint_pos gains a column)."
+  ],
+  "object": {"name": "door", "asset": "door"},
+  "articulation": {
+    "joint": "door_joint",
+    "keyframes": [[0, 0.0], [180, 0.0], [430, -1.40], [928, -1.40]]
+  },
+  "segments": [
+    {"start": 0, "end": 928, "mode": "static", "pos": [1.2, 0.0, 1.0], "quat": [1, 0, 0, 0]}
+  ],
+  "contact": [[180, 430]],
+  "smoothing": {"window": 9}
+}

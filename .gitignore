@@ -191,3 +191,13 @@ scripts/images
 checkpoint*.pt
 test/
 *.csv
+# --- pipeline/ (video -> motion -> task) ------------------------------------
+# Keep code, configs, annotations, recovered task targets and docs. Drop
+# regenerable intermediates and media: GVHMR .pt / retarget .pkl in work/,
+# run logs, and rendered videos (also covered by *.mp4 above).
+pipeline/work/
+pipeline/logs/
+pipeline/outputs/
+pipeline/vidoes/
+# Upstream ignores *.sh repo-wide; the pipeline's entry points are shell.
+!pipeline/*.sh

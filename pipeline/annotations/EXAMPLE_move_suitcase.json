@@ -1,0 +1,18 @@
+{
+  "_comment": [
+    "Worked example: rigid object carried in one hand.",
+    "The suitcase rests on the floor, is picked up at frame 210, carried while",
+    "riding the right hand, and set down at 640. The grasp transform is derived",
+    "automatically from the pose it held at frame 209, so the handoff is",
+    "continuous -- give offset_pos/offset_quat only to override that."
+  ],
+  "object": {"name": "suitcase", "asset": "suitcase"},
+  "extra_objects": [],
+  "segments": [
+    {"start": 0,   "end": 209, "mode": "static", "pos": [0.62, -0.18, 0.16], "quat": [1, 0, 0, 0]},
+    {"start": 210, "end": 640, "mode": "attach", "parent": "right_rubber_hand"},
+    {"start": 641, "end": 900, "mode": "static", "pos": [2.10, 0.35, 0.16], "quat": [1, 0, 0, 0]}
+  ],
+  "contact": [[210, 640]],
+  "smoothing": {"window": 9}
+}

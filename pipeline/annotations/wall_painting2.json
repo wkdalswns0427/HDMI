@@ -1,0 +1,64 @@
+{
+  "_comment": [
+    "wall_painting2: two-handed roller. `two_hand` runs the shaft axis between the right",
+    "and left wrist links so the roller follows the two-hand motion throughout the clip.",
+    "",
+    "The roller shaft is aligned with its local +Z axis. `axis_offset` places the roller",
+    "origin 0.700 m from the right wrist along the right-to-left wrist direction.",
+    "",
+    "target offsets are -0.700 m and -0.197 m along the roller local Z axis.",
+    "",
+    "grip_offset is omitted, so the wrist link origins are used directly as the two grip",
+    "points. The roller remains in contact with both hands throughout the reference motion.",
+    "contact_target_pos_offset is ordered [left, right] to match contact_eef_body_name in base/hdmi-base.yaml. right_wrist_yaw_link sits at local z = -axis_offset = -0.700; left at -0.197. These were swapped until 2026-09-29, which put each hand on the other's grip point (0.503 m error) and made every episode terminate on lost contact at the 25-step floor."
+  ],
+  "object": {
+    "name": "roller",
+    "asset": "roller"
+  },
+  "extra_objects": [],
+  "segments": [
+    {
+      "start": 0,
+      "end": 341,
+      "mode": "two_hand",
+      "parent_a": "right_wrist_yaw_link",
+      "parent_b": "left_wrist_yaw_link",
+      "axis_offset": 0.7,
+      "local_axis": "z"
+    }
+  ],
+  "contact": [
+    [
+      0,
+      341
+    ]
+  ],
+  "smoothing": {
+    "window": 5
+  },
+  "contact_target_pos_offset": [
+    [
+      0.0,
+      0,
+      -0.197
+    ],
+    [
+      0.0,
+      0,
+      -0.7
+    ]
+  ],
+  "contact_eef_pos_offset": [
+    [
+      0.05,
+      0.0,
+      0.0
+    ],
+    [
+      0.05,
+      0.0,
+      0.0
+    ]
+  ]
+}

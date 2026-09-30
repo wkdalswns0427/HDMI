@@ -490,6 +490,16 @@ class RobotObjectTracking(RobotTracking):
                 f"matched {num_motions} motions. Give one rectangle per motion, in "
                 f"the same order, or one rectangle total for a single motion."
             )
+            # Relative paths resolve against the repo root, the same way
+            # MotionDataset resolves data_path. A plain relative np.load would
+            # break: hydra runs with job.chdir=true, so cwd is the output dir.
+            import active_adaptation
+            from pathlib import Path
+            repo_root = Path(active_adaptation.__file__).parent.parent
+            region_paths = [
+                p if Path(p).is_absolute() else str(repo_root / p)
+                for p in region_paths
+            ]
             region_data = [np.load(p, allow_pickle=True) for p in region_paths]
 
             # Nominal target region per motion, extracted from each demonstration.
