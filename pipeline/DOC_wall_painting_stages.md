@@ -289,9 +289,10 @@ Randomize position with `target_region_uv_range`, not `target_region_pos_range`.
 $PY_HDMI scripts/train.py algo=ppo_roa_train task=G1/hdmi/wall_painting_goal \
   total_frames=450_000_000 save_interval=50
 
-$PY_HDMI pipeline/scripts/zsweep_eval.py --checkpoint <ckpt>
-// pins the target at z = -0.5 .. +0.5 m in 0.1 steps, 128 episodes each;
-// reports coverage, episode_len and success per offset
+$PY_HDMI pipeline/scripts/zsweep_eval.py --checkpoint <ckpt> --task <task>
+// pins the target at z = -0.5 .. +0.5 m in 0.1 steps; 128 episodes each, one
+// per env, all from frame 0 (pipeline/scripts/eval_episodes.py); ~2 min/offset
+// reports coverage, success, coverage over successful episodes, episode_len
 // --task must match what the checkpoint was TRAINED on: wall_painting2_both
 // for the fixed-target policy, wall_painting_goal for the goal-conditioned one
 ```
@@ -512,9 +513,11 @@ Stage 10, once the policy holds the roller for a meaningful fraction of the clip
 
 | overnight policy | training (random start) | evaluation (frame 0, target pinned at z=0) |
 | --- | --- | --- |
-| success | 0.795 | **0.683** -- completes the full 342-frame stroke |
-| coverage | -- | **0.690** -- 94% of the replayed demo's 0.73 |
-| lost-contact terminations | 12.6% | -- |
+| success | 0.795 | **0.758** -- completes the full 342-frame stroke |
+| coverage | -- | **0.742** -- the replayed demo gets 0.73; 0.922 over the episodes that finish |
+| lost-contact terminations | 12.6% | 13% |
+
+*Correction, 2026-09-30 evening:* this table and the sweep below first read success 0.683 and coverage 0.690. Those came from averaging `play.py`'s stats blocks, which undercounts long successful episodes; see "the sweep was biased" in the evening run log. Re-measured one episode per env.
 
 ```jsx
 // best fixed-target policy
@@ -522,25 +525,27 @@ HDMI/outputs/2026-09-29/23-25-54-G1WallPainting2Both-ppo_roa/
   wandb/run-20260929_232558-nvq3kptp/files/checkpoint_final.pt
 ```
 
-**The baseline sweep: the fixed-target policy ignores the target.** 128 episodes per offset, target pinned at each vertical offset:
+**The baseline sweep: the fixed-target policy ignores the target.** 128 episodes per offset, one per env, from frame 0, target pinned at each vertical offset. `cov|success` is coverage over the episodes that finish the stroke:
 
-| z offset | coverage | vs z=0 | overlap-only prediction | success |
-| --- | --- | --- | --- | --- |
-| -0.50 | 0.331 | 48% | 0.286 | 0.60 |
-| -0.40 | 0.429 | 62% | 0.367 | 0.66 |
-| -0.30 | 0.532 | 77% | 0.448 | 0.71 |
-| -0.20 | 0.586 | 85% | 0.528 | 0.67 |
-| -0.10 | 0.604 | 88% | 0.609 | 0.62 |
-| 0.00 | 0.690 | 100% | 0.690 | 0.68 |
-| +0.10 | 0.634 | 92% | 0.609 | 0.68 |
-| +0.20 | 0.577 | 84% | 0.528 | 0.74 |
-| +0.30 | 0.508 | 74% | 0.448 | 0.74 |
-| +0.40 | 0.392 | 57% | 0.367 | 0.69 |
-| +0.50 | 0.304 | 44% | 0.286 | 0.67 |
+| z offset | coverage | vs z=0 | overlap-only prediction | success | cov\|success |
+| --- | --- | --- | --- | --- | --- |
+| -0.50 | 0.350 | 47% | 0.307 | 0.73 | 0.440 |
+| -0.40 | 0.459 | 62% | 0.394 | 0.75 | 0.563 |
+| -0.30 | 0.550 | 74% | 0.481 | 0.75 | 0.685 |
+| -0.20 | 0.649 | 87% | 0.568 | 0.79 | 0.789 |
+| -0.10 | 0.662 | 89% | 0.655 | 0.72 | 0.878 |
+| 0.00 | 0.742 | 100% | 0.742 | 0.76 | 0.922 |
+| +0.10 | 0.661 | 89% | 0.655 | 0.73 | 0.862 |
+| +0.20 | 0.612 | 82% | 0.568 | 0.78 | 0.762 |
+| +0.30 | 0.458 | 62% | 0.481 | 0.68 | 0.646 |
+| +0.40 | 0.390 | 53% | 0.394 | 0.71 | 0.531 |
+| +0.50 | 0.306 | 41% | 0.307 | 0.72 | 0.414 |
 
-The overlap-only column is what a policy that paints the same spot every time would score: z=0 coverage times the fraction of the moved 0.853 m target that still overlaps the painted region. Measured coverage tracks it to within 0.99-1.19x across the whole range. Success is flat. The robot drops the roller at the same rate wherever the target is, and coverage falls only because the target walks away from where it paints. The sweep's summary -- ">=80% of z=0 coverage over +-0.2 m" -- is overlap, not generalization.
+The overlap-only column is what a policy that paints the same spot every time would score: z=0 coverage times the fraction of the moved 0.853 m target that still overlaps the painted region. Measured coverage tracks it to within 0.95-1.16x across the whole range, and `cov|success` tracks the same line drawn from its own z=0 value at 1.06-1.15x. Success is flat. The robot drops the roller at the same rate wherever the target is, and coverage falls only because the target walks away from where it paints. A ">=80% of z=0 coverage over +-0.2 m" band is overlap, not generalization.
 
-That makes the goal-conditioned comparison sharp: overlap predicts 0.29 at +-0.5 m, so a policy that follows the target has to hold clearly above that at the edges.
+That makes the goal-conditioned comparison sharp: overlap predicts 0.31 at +-0.5 m, so a policy that follows the target has to hold clearly above that at the edges.
+
+*Correction, 2026-09-30 evening:* this table first came from the biased block-averaging sweep (z=0: coverage 0.690, success 0.68; success 0.60-0.74 overall). The shape and the conclusion are unchanged. The old logs are in `zsweep_blocks_biased/` next to the checkpoint.
 
 ```jsx
 HDMI/outputs/2026-09-29/23-25-54-G1WallPainting2Both-ppo_roa/wandb/run-*/files/zsweep/results.json
@@ -552,9 +557,7 @@ HDMI/outputs/2026-09-29/23-25-54-G1WallPainting2Both-ppo_roa/wandb/run-*/files/z
 
 A checkpoint only loads into a task with the same observation space. Sweeping the fixed-target policy on `wall_painting2_zsweep` failed because that config adds `target_center_b` (object obs 30 -> 33) and vecnorm refused to load. The sweep now takes `--task` and defaults to `wall_painting2_both`; the z offset is applied by command-line override, so sweep the task the checkpoint was trained on.
 
-`play.py` never exits. Its rollout is `for i in itertools.count()`, printing a stats block each time `num_envs` episodes finish, forever. The sweep now streams `play.py`'s output, stops after `--blocks` stats blocks, and kills the process group -- which also covers IsaacSim hanging in teardown. `PYTHONUNBUFFERED=1` is required, or stats arrive in delayed chunks through the pipe.
-
-A single-offset test with 64 episodes gave success 0.425 and coverage 0.60 at z=0, with a between-block spread of 0.23. The full 128-episode run gave 0.683 and 0.690. Use at least four blocks.
+`play.py` never exits. Its rollout is `for i in itertools.count()`, printing a stats block each time `num_envs` episodes finish, forever. The first working sweep streamed `play.py`'s output, stopped after a few stats blocks and killed the process group. That worked, and it was wrong -- see the next run log. The sweep no longer uses `play.py` at all.
 
 **Goal-conditioned training started.** `wall_painting_goal`, from scratch, 450M frames, launched 11:50 at ~38.7k fps (finishes ~15:05). At iteration 172 (10 min): episode_len 27.1, lost-contact 0.908, success 0.002 -- off the 25-step floor and essentially on the same curve as run 2 at the same point (26.9, 0.918, 0.001), the only other from-scratch run. Both-hands contact is 0.010, which matters more here than it did for run 2: the product contact reward pays only when both hands are on, so near-zero both-hands means the contact reward is contributing almost nothing yet. If episode_len keeps rising while both-hands stays near 0.01 by iteration ~600, the policy is learning to survive one-handed and the fallback is two-stage -- mean contact reward first to establish the grip, then product.
 
@@ -577,3 +580,61 @@ Stage 5, student distillation, has never been run for painting.
 Canvas with collision, against the converged fixed-target baseline.
 
 The bend and squat clips. Whether they are needed depends on the goal-conditioned result: if it holds coverage to +-0.3 m or so, one standing clip already reaches most of what they would add.
+
+**Run log — 2026-09-30 evening: the goal-conditioned result, and a biased sweep**
+
+**Training.** `wall_painting_goal` from scratch, 450M frames, 3424 iterations, finished 15:17. Slower off the mark than run 2, the only other from-scratch run: at iteration 1140 it had episode_len 34.0, success 0.029, lost-contact 0.83 against run 2's 47.7, 0.114, 0.74. Both-hands contact sat near 0.02 per step until iteration ~1200 -- the product reward's cold start -- then climbed to 0.36. It plateaued from about iteration 2500 (episode_len 57.5 -> 58.9 -> 58.8, success 0.193 -> 0.200 -> 0.201), roughly where run 3 ended (60.5, 0.206). These are random-start training figures.
+
+```jsx
+// goal-conditioned policy
+HDMI/outputs/2026-09-30/11-50-08-G1WallPaintingGoal-ppo_roa/
+  wandb/run-20260930_115012-1mfissu4/files/checkpoint_final.pt
+```
+
+**The sweep was biased, and it mattered.** `play.py` prints the mean of the first `num_envs` episodes to finish, and the sweep stopped after four such blocks. Short failed episodes finish, restart at frame 0 and finish again many times before a long successful one finishes once, so stopping after 128 finished episodes drops exactly the long ones. On the goal-conditioned policy it read success 0.000 and episode_len 28 at every offset; the true figures at z=0 are 0.27 and 115. On the fixed-target policy, whose failures are rarer, it understated z=0 success 0.758 as 0.683 and coverage 0.742 as 0.690. The earlier tables in this log are corrected in place.
+
+The sweep now runs `pipeline/scripts/eval_episodes.py`, which is HDMI's own `scripts.helpers.evaluate` underneath: every env runs one complete episode from frame 0 and only that first episode counts, so 128 envs is 128 unbiased episodes. It exits on its own, so the streaming and block counting are gone. It also reports `cov|success`, coverage over the episodes that finish the stroke, which separates painting quality from drop rate. Do not quote `play.py`'s printed stats as a measurement for any policy whose episode lengths vary.
+
+**Result.** 128 episodes per offset, target pinned. Standard error on `cov|success` is 0.003-0.010 everywhere, on coverage 0.012-0.031.
+
+| z offset | fixed-target coverage | success | cov\|success | goal-conditioned coverage | success | cov\|success |
+| --- | --- | --- | --- | --- | --- | --- |
+| -0.50 | 0.350 | 0.73 | 0.440 | 0.321 | 0.27 | **0.639** |
+| -0.40 | 0.459 | 0.75 | 0.563 | 0.327 | 0.27 | **0.717** |
+| -0.30 | 0.550 | 0.75 | 0.685 | 0.345 | 0.28 | **0.800** |
+| -0.20 | 0.649 | 0.79 | 0.789 | 0.368 | 0.30 | **0.872** |
+| -0.10 | 0.662 | 0.72 | 0.878 | 0.360 | 0.29 | 0.888 |
+| 0.00 | 0.742 | 0.76 | 0.922 | 0.301 | 0.27 | 0.817 |
+| +0.10 | 0.661 | 0.73 | 0.862 | 0.264 | 0.28 | 0.718 |
+| +0.20 | 0.612 | 0.78 | 0.762 | 0.209 | 0.28 | 0.610 |
+| +0.30 | 0.458 | 0.68 | 0.646 | 0.166 | 0.30 | 0.510 |
+| +0.40 | 0.390 | 0.71 | 0.531 | 0.116 | 0.27 | 0.393 |
+| +0.50 | 0.306 | 0.72 | 0.414 | 0.091 | 0.28 | 0.293 |
+
+```jsx
+HDMI/outputs/2026-09-30/11-50-08-G1WallPaintingGoal-ppo_roa/wandb/run-*/files/zsweep/results.json
+// per-episode coverage and success are in there too
+```
+
+**It drops the roller.** The goal-conditioned policy finishes the stroke in 27-30% of episodes at every offset, the fixed-target one in 68-79%. 62% of its episodes end on lost contact against 13%, and at z=0 it has both hands on the roller 23% of steps against 62%. The rate is flat across offsets, so this is grip, not the target. It is why its mean coverage is below the baseline at every offset, and by the test written down beforehand -- mean coverage clearly above the baseline at the edges -- it fails.
+
+**When it holds on, it follows the target down.** At -0.5 m it covers 0.639 against the baseline's 0.440, and against the 0.338 it would score by painting its own z=0 spot (1.89x). The margin over the baseline grows with the offset: +0.08, +0.11, +0.15, +0.20 at -0.2, -0.3, -0.4, -0.5. The fixed-target policy tracks its overlap-only line at 1.06-1.15x in the same column. This is the first measurement in this pipeline of a policy painting a region its demonstration did not.
+
+**It does not follow up, and it paints lower than the demo.** Above z=0 it tracks its own overlap-only line (0.87-1.00x) and sits 0.10-0.15 below the baseline at every offset, including 0.817 against 0.922 at z=0. Its painted band is lower than the demonstrated stroke: its best offset is -0.1, and 0.293 at +0.5 is 0.25 m of the target, so it paints up to about 1.55 m where the demo reaches 1.649 m. The baseline's 0.414 at +0.5 is exactly the demo's top. The demonstrated stroke is near the top of standing reach, so following targets above it was never on offer, but a goal-conditioned policy should at least reach the demo's top when the target is high, and this one does not. Whether that is the same weak grip -- stretching up is where it would fail -- is not measured.
+
+**What it means.** The effect the thesis needs exists and is measurable, in the reachable direction, and it is hidden in mean coverage by a grip that fails three times as often. The drop rate is the binding problem. The fixed-target policy got its grip from 1.05B frames and a mean-then-product contact curriculum; this one has 450M with the product reward from a cold start.
+
+**Open**
+
+More training on the goal-conditioned policy from its own `checkpoint_final.pt`, which keeps it a from-scratch lineage. Success from frame 0 is the number to move, toward the baseline's ~0.75, while `cov|success` at -0.5 holds near 0.64 and z=0 recovers toward 0.92. Then the same sweep.
+
+```jsx
+$PY_HDMI scripts/train.py algo=ppo_roa_train task=G1/hdmi/wall_painting_goal \
+  checkpoint_path=<goal checkpoint_final.pt> total_frames=450_000_000 save_interval=50
+```
+
+If it stays on the plateau, the two-stage fallback from scratch: mean contact reward to establish the grip, then product.
+
+The bend and squat clips extend downward reach. This result says downward is where one standing clip already follows the target, to about -0.5 m when it holds on.
+
+Stage 5 distillation and canvas collision, as before.

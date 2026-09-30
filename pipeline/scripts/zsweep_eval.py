@@ -2,23 +2,31 @@
 """Measure how far the wall-painting target can move in z before a policy stops
 covering it.
 
-For each z offset, runs HDMI's play.py with the target region PINNED at that
-offset and records, per block of finished episodes:
+For each z offset, evaluates the policy with the target region PINNED at that
+offset, one complete episode per env, every episode from frame 0 of the clip
+(pipeline/scripts/eval_episodes.py). Per offset it reports:
 
-    coverage     stats/debug/paint_coverage -- unweighted mirror of
-                 paint_coverage_delta, so its episode sum IS the final coverage
+    coverage     final coverage of the target, mean over episodes
+    success      fraction of episodes that reach the end of the clip
+                 (command.success: t >= motion_len - 1)
+    cov|success  coverage over the successful episodes only -- painting
+                 quality with the drop rate taken out
     episode_len  how long episodes last before terminating
-    success      fraction of episodes that reach 90% of max length
+    lost         fraction of episodes ended by the lost-contact termination
 
 Coverage alone cannot tell "paints the wrong place" from "drops the roller
-early", so all three are reported.
+early", so both are reported, and cov|success separates them: a policy that
+follows the target keeps cov|success up as the target moves, one that paints
+the demonstrated spot loses it by the overlap.
 
-    python pipeline/scripts/zsweep_eval.py --checkpoint <ckpt>
+    python pipeline/scripts/zsweep_eval.py --checkpoint <ckpt> --task <task>
 
-play.py never exits on its own -- its rollout is `for i in itertools.count()`
--- so each offset is run as a stream: read play.py's output, stop after
---blocks stats blocks (each block is num_envs finished episodes), then kill the
-process group. IsaacSim also hangs in teardown, which the group kill covers.
+An earlier version streamed play.py and averaged its first few printed stats
+blocks. That is biased: play.py prints the mean of the first num_envs episodes
+to FINISH, short failed episodes finish (and restart) many times before a long
+successful one finishes once, so stopping early drops the successes. For the
+goal-conditioned policy it read success 0.000 at z=0 where the true rate was
+0.29. One episode per env has no such bias.
 
 The reference clip paints z = 0.796 .. 1.649 m with the pelvis fixed at
 0.809 m. Offsets are applied to the target centre along world z, which for this
@@ -27,12 +35,10 @@ wall is the in-plane vertical, so the target stays on the wall.
 
 import argparse
 import json
+import math
 import os
-import re
 import signal
-import statistics
 import subprocess
-import threading
 import time
 from pathlib import Path
 
@@ -43,25 +49,19 @@ from hdmi_pipeline import paths
 
 HDMI = paths.HDMI_ROOT
 PY = paths.conda_python("hdmi")
-
-# play.py prints each stat as `(<key tuple>) <value>`; one line per key.
-PATTERNS = {
-    "coverage": re.compile(r"\('stats', 'debug', 'paint_coverage'\)\s+([\d.eE+-]+)"),
-    "episode_len": re.compile(r"\('stats', 'episode_len'\)\s+([\d.eE+-]+)"),
-    "success": re.compile(r"\('stats', 'success'\)\s+([\d.eE+-]+)"),
-}
+EVAL = paths.PIPELINE / "scripts" / "eval_episodes.py"
 
 
-def run_one(checkpoint: str, z: float, task: str, num_envs: int, blocks: int,
-            timeout_s: float, out_dir: Path) -> dict:
-    """Stream one play.py run with the target pinned at `z`.
+def run_one(checkpoint: str, z: float, task: str, num_envs: int,
+            timeout_s: float, out_dir: Path) -> dict | None:
+    """Evaluate num_envs episodes with the target pinned at `z`.
 
-    Returns {metric: [value per stats block]}; empty lists if nothing parsed.
+    Returns eval_episodes.py's RESULT dict, or None if it produced none.
     """
     log = out_dir / f"z{z:+.3f}.log"
 
     cmd = [
-        PY, "scripts/play.py",
+        PY, str(EVAL),
         f"task=G1/hdmi/{task}",
         # ppo_roa does NOT exist -- the algo configs come from a structured
         # config store, not cfg/algo/*.yaml, and the trained checkpoints all
@@ -71,7 +71,7 @@ def run_one(checkpoint: str, z: float, task: str, num_envs: int, blocks: int,
         "headless=true",
         f"task.num_envs={num_envs}",
         # Pin the target: everything fixed except the swept z. Tasks like
-        # wall_painting_goal also randomize the in-plane position and the width,
+        # wall_painting_goal also randomize the in-plane position and the size,
         # so those must be pinned too or the "pinned" target still moves.
         # `++` adds the key when the task config does not declare it.
         f"task.command.target_region_pos_range.z=[{z},{z}]",
@@ -79,69 +79,47 @@ def run_one(checkpoint: str, z: float, task: str, num_envs: int, blocks: int,
         "++task.command.target_region_uv_range.v=[0.0,0.0]",
         "task.command.target_region_scale_range.width=[1.0,1.0]",
         "task.command.target_region_scale_range.height=[1.0,1.0]",
+        # keep hydra's per-run directories out of outputs_play/
+        # quoted: hydra's override grammar is not happy with a bare `+` in z+0.1
+        f"hydra.run.dir='{out_dir / 'hydra' / f'z{z:+.3f}'}'",
     ]
 
-    # Without this, play.py's stdout is block-buffered into the pipe and stats
-    # arrive in large delayed chunks, or not at all before the kill.
-    env = dict(os.environ, PYTHONUNBUFFERED="1")
+    env = dict(os.environ)
     env.pop("PYTHONNOUSERSITE", None)   # the hdmi env needs ~/.local
-
-    results = {k: [] for k in PATTERNS}
 
     with open(log, "w") as fh:
         proc = subprocess.Popen(
-            cmd, cwd=HDMI, env=env, text=True, bufsize=1,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            cmd, cwd=HDMI, env=env, stdout=fh, stderr=subprocess.STDOUT,
             start_new_session=True,       # its own process group, for the kill
         )
-
-        def kill_group():
+        try:
+            proc.wait(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            pass
+        finally:
+            # eval_episodes.py exits via os._exit, but if IsaacSim hangs
+            # anywhere the group kill still clears it.
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-
-        # A hung play.py produces no lines, so a timeout checked inside the
-        # read loop would never fire. A timer kills it from outside instead.
-        watchdog = threading.Timer(timeout_s, kill_group)
-        watchdog.start()
-        try:
-            for line in proc.stdout:
-                fh.write(line)
-                for key, pat in PATTERNS.items():
-                    m = pat.search(line)
-                    if m:
-                        results[key].append(float(m.group(1)))
-                # A block is complete once its coverage line has been seen.
-                if len(results["coverage"]) >= blocks:
-                    break
-        finally:
-            watchdog.cancel()
-            kill_group()
             proc.wait()
 
-    if not results["coverage"]:
-        # Say why, loudly: a silent empty result for every offset looks the
-        # same as "the policy scored nothing", and that cost an hour once.
-        text = log.read_text(errors="ignore")
-        reason = next(
-            (l.strip() for l in text.splitlines()
-             if "Could not find" in l or "Traceback" in l
-             or "Error executing" in l or "RuntimeError" in l),
-            f"no stats block within {timeout_s:.0f}s",
-        )
-        print(f"    !! z={z:+.2f}: nothing parsed -- {reason[:110]}")
-        print(f"    !! full log: {log}")
+    text = log.read_text(errors="ignore")
+    for line in text.splitlines():
+        if line.startswith("RESULT "):
+            return json.loads(line[len("RESULT "):])
 
-    return results
-
-
-def summarize(values: list) -> tuple:
-    if not values:
-        return None, None
-    mean = statistics.fmean(values)
-    std = statistics.stdev(values) if len(values) > 1 else 0.0
-    return mean, std
+    # Say why, loudly: a silent empty row looks the same as "scored nothing".
+    reason = next(
+        (l.strip() for l in text.splitlines()
+         if "Could not find" in l or "Traceback" in l
+         or "Error executing" in l or "RuntimeError" in l),
+        f"no RESULT line within {timeout_s:.0f}s",
+    )
+    print(f"    !! z={z:+.2f}: nothing parsed -- {reason[:110]}")
+    print(f"    !! full log: {log}")
+    return None
 
 
 def main():
@@ -152,9 +130,9 @@ def main():
                     help="task config under cfg/task/G1/hdmi. Must have the "
                          "SAME observation space the checkpoint was trained "
                          "with -- the z offset is applied by CLI override, so "
-                         "sweep the training task, not wall_painting2_zsweep. "
-                         "That config adds target_center_b (obs 30 -> 33) and "
-                         "a policy trained without it fails to load vecnorm.")
+                         "sweep the training task. wall_painting_goal adds "
+                         "target_center_b (obs 30 -> 33); a checkpoint trained "
+                         "without it fails to load vecnorm there.")
     ap.add_argument("--offsets", type=float, nargs="+",
                     default=[-0.5, -0.4, -0.3, -0.2, -0.1, 0.0,
                              0.1, 0.2, 0.3, 0.4, 0.5],
@@ -162,10 +140,8 @@ def main():
                          "target bottom at 0.296 m (squat territory), +0.5 "
                          "puts the top at 2.149 m (out of standing reach). "
                          "Past -0.6 the target passes through the floor.")
-    ap.add_argument("--num_envs", type=int, default=32)
-    ap.add_argument("--blocks", type=int, default=3,
-                    help="stats blocks to average per offset; each block is "
-                         "num_envs finished episodes")
+    ap.add_argument("--num_envs", type=int, default=128,
+                    help="episodes per offset (one per env)")
     ap.add_argument("--timeout", type=float, default=600.0,
                     help="seconds per offset before giving up on it")
     ap.add_argument("--out", default=None,
@@ -178,49 +154,33 @@ def main():
 
     print(f"checkpoint : {args.checkpoint}")
     print(f"task       : {args.task}")
-    print(f"envs       : {args.num_envs} x {args.blocks} blocks "
-          f"= {args.num_envs * args.blocks} episodes per offset")
+    print(f"episodes   : {args.num_envs} per offset, one per env, from frame 0")
     print(f"logs       : {out_dir}\n")
-    print(f"{'z [m]':>7}  {'coverage':>15}  {'vs z=0':>7}  "
-          f"{'episode_len':>11}  {'success':>7}  {'time':>5}")
-    print("-" * 64)
+    print(f"{'z [m]':>6}  {'coverage (s.e.)':>15}  {'vs z=0':>6}  {'success':>7}  "
+          f"{'cov|success':>11}  {'ep_len':>6}  {'lost':>5}  {'time':>5}")
+    print("-" * 78)
 
     results = {}
     for z in args.offsets:
         t0 = time.time()
         r = run_one(args.checkpoint, z, args.task, args.num_envs,
-                    args.blocks, args.timeout, out_dir)
-        cov, cov_sd = summarize(r["coverage"])
-        el, _ = summarize(r["episode_len"])
-        su, _ = summarize(r["success"])
-        results[f"{z:+.3f}"] = {
-            "coverage": cov, "coverage_std": cov_sd,
-            "episode_len": el, "success": su,
-            "blocks": r["coverage"],
-        }
-
-        base = results.get("+0.000", {}).get("coverage")
-        rel = f"{cov / base * 100:6.1f}%" if (cov is not None and base) else "      -"
-        cov_s = f"{cov:.4f} +-{cov_sd:.4f}" if cov is not None else "           none"
-        el_s = f"{el:11.1f}" if el is not None else "          -"
-        su_s = f"{su:7.3f}" if su is not None else "      -"
-        print(f"{z:+7.2f}  {cov_s:>15}  {rel:>7}  {el_s}  {su_s}  "
-              f"{time.time() - t0:4.0f}s", flush=True)
-
+                    args.timeout, out_dir)
+        results[f"{z:+.3f}"] = r
+        if r is not None:
+            base = (results.get("+0.000") or {}).get("coverage")
+            rel = f"{r['coverage'] / base * 100:5.1f}%" if base else "     -"
+            sem = r["coverage_std"] / math.sqrt(r["episodes"])
+            cgs = r["coverage_given_success"]
+            cgs_s = f"{cgs:11.3f}" if cgs is not None else "          -"
+            cov_s = f"{r['coverage']:.3f} ({sem:.3f})"
+            print(f"{z:+6.2f}  {cov_s:>15}  {rel:>6}  "
+                  f"{r['success']:7.3f}  {cgs_s}  {r['episode_len']:6.1f}  "
+                  f"{r['lost_contact_term']:5.2f}  {time.time() - t0:4.0f}s",
+                  flush=True)
         # Write as we go, so a crash partway still leaves the finished rows.
         (out_dir / "results.json").write_text(json.dumps(results, indent=2))
 
     print(f"\nwrote {out_dir / 'results.json'}")
-
-    ok = {k: v for k, v in results.items() if v["coverage"] is not None}
-    if "+0.000" in ok:
-        base = ok["+0.000"]["coverage"]
-        held = [float(k) for k, v in ok.items() if v["coverage"] >= 0.8 * base]
-        if held:
-            print(f"\nholds >=80% of the z=0 coverage over "
-                  f"z = {min(held):+.2f} .. {max(held):+.2f} m")
-            print("That band is what one standing clip covers without retraining. "
-                  "Compare the goal-conditioned policy against it.")
 
 
 if __name__ == "__main__":
