@@ -201,3 +201,9 @@ pipeline/outputs/
 pipeline/vidoes/
 # Upstream ignores *.sh repo-wide; the pipeline's entry points are shell.
 !pipeline/*.sh
+
+# Runtime and backup artifacts: regenerated or not source.
+# asset_meta.json is rewritten on every run, so tracking it dirties the repo.
+asset_meta.json
+record_motion/
+*.orig
