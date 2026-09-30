@@ -281,19 +281,22 @@ The interesting tension: tracking says "be the worker", coverage says "paint the
 
 The demonstration paints 0.796–1.649 m from a fixed stance. The question is whether the policy can paint a rectangle somewhere else. Two levers, cheapest first.
 
-**Move the goal.** `target_region_pos_range.z` and `target_region_scale_range.height` are already config values pinned at zero and 1.0. Unpinning them moves the target while the reference stays put — goal-conditioned training for the price of a config edit. `cfg/task/G1/hdmi/wall_painting2_zsweep.yaml` does this with z ±0.15 m and height 0.80–1.25, and switches on `target_center_b`, which the policy needs once the target is no longer where the demo left it.
+**Move the goal.** `cfg/task/G1/hdmi/wall_painting_goal.yaml` randomizes the target on every reset while the reference stays put: it slides +-0.35 m horizontally and +-0.40 m vertically along the wall (`target_region_uv_range`) and scales 0.7-1.3x, and it switches on `target_center_b`, which the policy needs once the target is no longer where the demo left it. That observation makes the input 33-dim instead of 30, so this task trains from scratch -- no fixed-target checkpoint loads into it.
+
+Randomize position with `target_region_uv_range`, not `target_region_pos_range`. The latter is a world-frame xyz offset, and with this wall's normal at [0.879, 0.477, 0] a world x/y offset of the same size pushes the region up to 0.468 m off the wall plane. The uv offset stays on it to 1e-16 m.
 
 ```jsx
-$PY_HDMI scripts/train.py algo=ppo_roa_train task=G1/hdmi/wall_painting2_zsweep \
-  save_interval=50
+$PY_HDMI scripts/train.py algo=ppo_roa_train task=G1/hdmi/wall_painting_goal \
+  total_frames=450_000_000 save_interval=50
 
-python pipeline/scripts/zsweep_eval.py --checkpoint <ckpt> \
-  --offsets -0.20 -0.15 -0.10 -0.05 0.0 0.05 0.10 0.15 0.20
-// pins the target at each offset, reads stats/debug/paint_coverage,
-// reports the band where coverage holds >=80% of the pinned baseline
+$PY_HDMI pipeline/scripts/zsweep_eval.py --checkpoint <ckpt>
+// pins the target at z = -0.5 .. +0.5 m in 0.1 steps, 128 episodes each;
+// reports coverage, episode_len and success per offset
+// --task must match what the checkpoint was TRAINED on: wall_painting2_both
+// for the fixed-target policy, wall_painting_goal for the goal-conditioned one
 ```
 
-**Add postures.** Film the same task with knees bent ~45° and in a squat, retarget each, and train on all three as a motion set. Projected bands: stand 0.80–1.65 (measured), bend ~0.58–1.43, squat ~0.44–1.29, union 0.44–1.65 — 42% more wall for two more shoots. Needs two code changes first, both described in `DOC_multi_demo_same_task.md`: concatenating `object_contact` across motions (four lines, `command.py:619`) and making `target_region_path` per-motion so coverage 1.0 stays reachable in every episode.
+**Add postures.** Film the same task with knees bent ~45° and in a squat, retarget each, and train on all three as a motion set. Projected bands: stand 0.80–1.65 (measured), bend ~0.58–1.43, squat ~0.44–1.29, union 0.44–1.65 — 42% more wall for two more shoots. Needed two code changes, both now in (see the multi-motion section below): concatenating `object_contact` across motions and making `target_region_path` per-motion so coverage 1.0 stays reachable in every episode.
 
 Run the sweep before filming. It may show the band you care about is already covered.
 
@@ -331,7 +334,7 @@ train/stats/success
 
 `episode_len` was still accelerating at the end (31.9 at iteration 900, 48.9 at 1144), so the run stopped mid-climb.
 
-**It holds the roller one-handed.** Visible in `pipeline/wall_painting2_policy.mp4`: one hand on the shaft, the other parked on the hip for most of the clip. This caps the contact metric at 0.5, because `eef_contact_all` is a mean over the two end-effectors — the final 0.230 is roughly one hand engaged half the time. The policy found a local optimum where half the contact reward is cheap to collect. Worth trying before more frames: make the contact reward multiplicative across hands instead of a mean, so half credit stops being available.
+**It holds the roller one-handed.** Visible in `pipeline/vidoes/wall_painting2_policy_02_fixed.mp4`: one hand on the shaft, the other parked on the hip for most of the clip. This caps the contact metric at 0.5, because `eef_contact_all` is a mean over the two end-effectors — the final 0.230 is roughly one hand engaged half the time. The policy found a local optimum where half the contact reward is cheap to collect. Worth trying before more frames: make the contact reward multiplicative across hands instead of a mean, so half credit stops being available.
 
 **The rasterizer was 19.6x slower than it needed to be.** Covered in Stage 9 above; the numbers came from here. Batched, it was verified bitwise-identical to the per-env version offline (40 steps x 24 envs, mixed rectangle sizes, zero difference in mask, ratio and grid) and across four live replays whose final coverage values (0.7307, 0.7378, 0.7364, 0.7367) are indistinguishable between versions.
 
@@ -345,8 +348,8 @@ HDMI/outputs/2026-09-29/11-34-19-G1WallPainting2-ppo_roa/
 // LOOKS complete, is worthless -- trained with the swapped targets
 HDMI/outputs/2026-09-28/19-11-47-G1WallPainting2-ppo_roa/   // 23 ckpts + final
 
-pipeline/wall_painting2_policy.mp4          // working policy, one-handed
-pipeline/wall_painting2_policy_broken.mp4   // swapped targets, roller loose
+pipeline/vidoes/wall_painting2_policy_02_fixed.mp4    // working policy, one-handed
+pipeline/vidoes/wall_painting2_policy_01_broken.mp4   // swapped targets, roller loose
 ```
 
 **Open, in order**
@@ -356,6 +359,8 @@ Make the contact reward multiplicative and retrain, to find out whether the one-
 Then continue from `checkpoint_final.pt` with `total_frames=300_000_000`, since the last run had not plateaued.
 
 The z-sweep is premature until the policy holds the roller for a meaningful fraction of the 342-frame clip. At 48.9 steps it holds for about a second, so a sweep now would mostly measure how quickly it drops the roller at each height.
+
+*Correction, 2026-09-30:* "48.9 steps = about a second of the clip" misreads the metric. Training episodes start at a random frame, so `episode_len` is not how far into the clip the robot gets. See the 2026-09-30 run log.
 
 **Run log — 2026-09-29 continued: does more training fix the one-handed grip?**
 
@@ -370,7 +375,7 @@ No. Warm-started from the corrected run's `checkpoint_final.pt` for another 150M
 
 It converged. Over the final 320 iterations episode_len moved 60.0 -> 60.7, success 0.202 -> 0.207, contact 0.375 -> 0.384. Almost all the gain landed in the first 200 iterations, which is the warm start settling rather than new learning. The previous run's curve was still bending upward when it stopped; this one is flat.
 
-The video (`pipeline/wall_painting2_policy_cont.mp4`) shows the same grip as before: one hand on the shaft, the other bent at the waist, roller dropped partway through. Longer hold, same strategy.
+The video (`pipeline/vidoes/wall_painting2_policy_03_cont.mp4`) shows the same grip as before: one hand on the shaft, the other bent at the waist, roller dropped partway through. Longer hold, same strategy.
 
 **Why 0.384 is the tell.** `eef_contact_all` averages over the two end-effectors, so a *perfect* one-handed grip caps at 0.5. Converging at 0.384 means the policy is near the ceiling of the wrong strategy, not partway to the right one. Half the contact reward is cheap and the second hand is never worth reaching for.
 
@@ -428,7 +433,8 @@ Five runs in one day. Two changes produced all of the improvement, and neither w
 | success | 0.000 | 0.123 | 0.207 | 0.362 | **0.527** |
 | both-hands contact | — | — | 0.190 | 0.447 | **0.546** |
 | lost-contact term. | 100% | 73.9% | 73.9% | 53.6% | **35.3%** |
-| % of the 342-frame clip | 7% | 14% | 18% | 25% | **32%** |
+
+*Correction, 2026-09-30:* this table previously had a "% of the 342-frame clip" row computed as `episode_len` / 342. That is wrong: training episodes start at a random frame, so `episode_len` measures time from a random start, not progress through the clip. Full-stroke performance has to be measured in evaluation, which starts at frame 0 -- see the 2026-09-30 run log.
 
 Run 3 (more frames on the mean reward) converged: its last 320 iterations moved episode_len by 0.7. Runs 4 and 5 (product reward) were still climbing when each stopped, run 5 steeper at the end than the middle. The ceiling has not been found.
 
@@ -444,17 +450,18 @@ Renders showed the robot painting empty air, because nothing in the scene repres
 
 ```jsx
 $PY_HDMI $SB/HDMI/pipeline/scripts/make_canvas_usd.py
-// reads the task's paint_target_rectangle.npz, authors a plate of that size
-// plus a margin -> 0.9025 x 1.1529 m for wall_painting2 (0.15 m each side)
+// authors a wall standing on the ground: 2.0 m wide, tall enough to cover the
+// highest randomized target plus headroom -> 2.0 x 2.349 m for wall_painting2
+// --width, --max-z-offset, --headroom to change it
 ```
 
 Registered as `"canvas"` in the OBJECTS registry and spawned automatically by `locomotion.py` for any task that sets `target_region_path`, so every painting render gets it with no config change. `show_canvas: false` in the command config turns it off.
 
 **It has no collision on purpose.** The roller passes through, so the physics is identical to a run without it and every result above stays comparable. Giving it collision is a real experiment rather than a rendering change: the human in the demo was pressing against a wall while the robot pushes against nothing, so a surface to react against might help exactly the contact-loss failure that still caps these runs. Worth doing against a converged baseline, not layered onto a policy that is still improving.
 
-`_place_canvas()` sits it on the wall plane at each env's target centre, re-placed on reset so it follows target randomization in the z-sweep. The rotation whose columns are `[axis_u, axis_v, normal]` maps the plate's local X/Y/Z onto the wall's horizontal, vertical and outward directions; verified orthonormal with det +1, and all four target corners land in the canvas plane at |z| = 6e-17.
+The wall is fixed and the target moves on it. A real wall does not slide when the job does, so `_place_canvas()` stands it on the ground under the nominal target: the prim origin is authored at the wall's bottom edge, so grounding it is just placing the origin at z = 0, with no height bookkeeping in the command. Target randomization moves the painted region across this static wall. The rotation whose columns are `[axis_u, axis_v, normal]` maps the plate's local X/Y/Z onto the wall's horizontal, vertical and outward directions; verified orthonormal with det +1, and all four target corners land in the wall plane at |z| = 6e-17.
 
-Known cosmetic issue: the canvas spans only the target rectangle plus margin, so its bottom edge sits at z 0.646 m and it floats above the floor. A larger vertical margin fixes it.
+(An earlier version sized the canvas to the target rectangle plus 0.15 m and re-placed it on the target every reset, so it floated 0.65 m above the floor and would have slid with the target. Replaced 2026-09-29.)
 
 **Debug overlay, GUI only**
 
@@ -469,7 +476,7 @@ If the blue dots do not land under the roller head and inside the amber rectangl
 
 **Multi-motion support is in and is backward compatible**
 
-Both changes from `DOC_multi_demo_same_task.md` are implemented. `object_contact` concatenates across `motion_paths` in dataset order, with an assert against `dataset.ends[-1]`. `target_region_path` accepts a string or a list; rectangles load as `[num_motions, ...]` and `_sample_target_region` indexes them by `motion_ids`, so each env paints the rectangle of the clip it drew. The raster is sized to the largest rectangle across motions, and `target_region_size` normalizes per-motion.
+Both changes the motion set needs are implemented. `object_contact` concatenates across `motion_paths` in dataset order, with an assert against `dataset.ends[-1]`. `target_region_path` accepts a string or a list; rectangles load as `[num_motions, ...]` and `_sample_target_region` indexes them by `motion_ids`, so each env paints the rectangle of the clip it drew. The raster is sized to the largest rectangle across motions, and `target_region_size` normalizes per-motion.
 
 Single-clip behaviour is unchanged, verified exactly: per-env width, height, centre and the `target_region_size` observation all `max|old-new| = 0`, raster grid identical at (151, 214), and `np.concatenate([x])` array-equal to `x`. A single-clip replay loads clean.
 
@@ -482,11 +489,11 @@ Single-clip behaviour is unchanged, verified exactly: per-env width, height, cen
 HDMI/outputs/2026-09-29/19-09-19-G1WallPainting2Both-ppo_roa/
   wandb/run-20260929_190923-ajlaed22/files/checkpoint_final.pt
 
-pipeline/wall_painting2_policy_canvas.mp4   // run 4 policy, canvas in scene
-pipeline/wall_painting2_policy_both.mp4     // run 4 policy, no canvas
-pipeline/wall_painting2_policy_cont.mp4     // run 3
-pipeline/wall_painting2_policy.mp4          // run 2
-pipeline/wall_painting2_policy_broken.mp4   // swapped targets, roller loose
+pipeline/vidoes/wall_painting2_policy_05_canvas.mp4   // run 4 policy, floating canvas
+pipeline/vidoes/wall_painting2_policy_04_both.mp4     // run 4 policy, no canvas
+pipeline/vidoes/wall_painting2_policy_03_cont.mp4     // run 3
+pipeline/vidoes/wall_painting2_policy_02_fixed.mp4    // run 2
+pipeline/vidoes/wall_painting2_policy_01_broken.mp4   // swapped targets, roller loose
 ```
 
 **Open**
@@ -496,3 +503,77 @@ Stage 5 has never been run for painting. Every checkpoint so far is a teacher; t
 The canvas-with-collision experiment, against a converged baseline.
 
 Stage 10, once the policy holds the roller for a meaningful fraction of the clip. At 111 of 342 frames it is closer than it was, but a z-sweep still partly measures drop rate rather than painting quality.
+
+**Run log — 2026-09-30: converged, measured properly, and the baseline**
+
+**A metric misread, corrected.** During training every episode starts at a random frame of the clip (`start_t = rand() * (motion_len - 32)` in `_sample_motions`), and `success` means reaching the end of the clip from wherever it started (`t >= motion_len - 1`). So a training-time `episode_len` of 155 is not "155 of 342 frames into the stroke", and a training `success` of 0.795 means finishing from a random start -- about half the clip on average -- not finishing the whole stroke. Evaluation (`play.py`, `render.py`, the sweep) starts every episode at frame 0 (`if not self.env.training: start_t.fill_(0)`), so only evaluation measures the full stroke. Earlier sections that divided `episode_len` by 342 are marked as corrected where they appear.
+
+**The overnight run converged.** Warm-started from run 5, 450M frames, 3433 iterations, 3.17 h at 43.5k fps, and this time it genuinely plateaued: episode_len by quarter 134.6 -> 147.3 -> 152.3 -> 155.2, and the last eight samples inside a 1.5-step band.
+
+| overnight policy | training (random start) | evaluation (frame 0, target pinned at z=0) |
+| --- | --- | --- |
+| success | 0.795 | **0.683** -- completes the full 342-frame stroke |
+| coverage | -- | **0.690** -- 94% of the replayed demo's 0.73 |
+| lost-contact terminations | 12.6% | -- |
+
+```jsx
+// best fixed-target policy
+HDMI/outputs/2026-09-29/23-25-54-G1WallPainting2Both-ppo_roa/
+  wandb/run-20260929_232558-nvq3kptp/files/checkpoint_final.pt
+```
+
+**The baseline sweep: the fixed-target policy ignores the target.** 128 episodes per offset, target pinned at each vertical offset:
+
+| z offset | coverage | vs z=0 | overlap-only prediction | success |
+| --- | --- | --- | --- | --- |
+| -0.50 | 0.331 | 48% | 0.286 | 0.60 |
+| -0.40 | 0.429 | 62% | 0.367 | 0.66 |
+| -0.30 | 0.532 | 77% | 0.448 | 0.71 |
+| -0.20 | 0.586 | 85% | 0.528 | 0.67 |
+| -0.10 | 0.604 | 88% | 0.609 | 0.62 |
+| 0.00 | 0.690 | 100% | 0.690 | 0.68 |
+| +0.10 | 0.634 | 92% | 0.609 | 0.68 |
+| +0.20 | 0.577 | 84% | 0.528 | 0.74 |
+| +0.30 | 0.508 | 74% | 0.448 | 0.74 |
+| +0.40 | 0.392 | 57% | 0.367 | 0.69 |
+| +0.50 | 0.304 | 44% | 0.286 | 0.67 |
+
+The overlap-only column is what a policy that paints the same spot every time would score: z=0 coverage times the fraction of the moved 0.853 m target that still overlaps the painted region. Measured coverage tracks it to within 0.99-1.19x across the whole range. Success is flat. The robot drops the roller at the same rate wherever the target is, and coverage falls only because the target walks away from where it paints. The sweep's summary -- ">=80% of z=0 coverage over +-0.2 m" -- is overlap, not generalization.
+
+That makes the goal-conditioned comparison sharp: overlap predicts 0.29 at +-0.5 m, so a policy that follows the target has to hold clearly above that at the edges.
+
+```jsx
+HDMI/outputs/2026-09-29/23-25-54-G1WallPainting2Both-ppo_roa/wandb/run-*/files/zsweep/results.json
+```
+
+**Three ways the sweep failed before it worked.** Worth knowing because each one returned a plausible-looking empty table rather than an error.
+
+`algo=ppo_roa` does not exist. The algo configs come from a structured config store, not `cfg/algo/*.yaml`, so they are not visible by listing that directory; the valid name is `ppo_roa_train`. Hydra failed instantly and every offset parsed as None.
+
+A checkpoint only loads into a task with the same observation space. Sweeping the fixed-target policy on `wall_painting2_zsweep` failed because that config adds `target_center_b` (object obs 30 -> 33) and vecnorm refused to load. The sweep now takes `--task` and defaults to `wall_painting2_both`; the z offset is applied by command-line override, so sweep the task the checkpoint was trained on.
+
+`play.py` never exits. Its rollout is `for i in itertools.count()`, printing a stats block each time `num_envs` episodes finish, forever. The sweep now streams `play.py`'s output, stops after `--blocks` stats blocks, and kills the process group -- which also covers IsaacSim hanging in teardown. `PYTHONUNBUFFERED=1` is required, or stats arrive in delayed chunks through the pipe.
+
+A single-offset test with 64 episodes gave success 0.425 and coverage 0.60 at z=0, with a between-block spread of 0.23. The full 128-episode run gave 0.683 and 0.690. Use at least four blocks.
+
+**Goal-conditioned training started.** `wall_painting_goal`, from scratch, 450M frames, launched 11:50 at ~38.7k fps (finishes ~15:05). At iteration 172 (10 min): episode_len 27.1, lost-contact 0.908, success 0.002 -- off the 25-step floor and essentially on the same curve as run 2 at the same point (26.9, 0.918, 0.001), the only other from-scratch run. Both-hands contact is 0.010, which matters more here than it did for run 2: the product contact reward pays only when both hands are on, so near-zero both-hands means the contact reward is contributing almost nothing yet. If episode_len keeps rising while both-hands stays near 0.01 by iteration ~600, the policy is learning to survive one-handed and the fallback is two-stage -- mean contact reward first to establish the grip, then product.
+
+```jsx
+HDMI/outputs/2026-09-30/11-50-08-G1WallPaintingGoal-ppo_roa/
+```
+
+**Housekeeping**
+
+`pipeline/` now lives only at `HDMI/pipeline/`, in the fork `github.com/wkdalswns0427/HDMI` on branch `wall-painting`. Scripts locate themselves through `hdmi_pipeline/paths.py`; set `SIMBENCH_ROOT` and `CONDA_ROOT` on a machine with a different layout. `target_region_path` in the task configs is repo-relative.
+
+Policy videos are numbered in the order they were rendered, in `pipeline/vidoes/`: `_01_broken`, `_02_fixed`, `_03_cont`, `_04_both`, `_05_canvas`, `_06_wall`, `_07_converged`.
+
+**Open**
+
+The goal-conditioned result: run the same sweep on its checkpoint with `--task wall_painting_goal` and compare against the table above.
+
+Stage 5, student distillation, has never been run for painting.
+
+Canvas with collision, against the converged fixed-target baseline.
+
+The bend and squat clips. Whether they are needed depends on the goal-conditioned result: if it holds coverage to +-0.3 m or so, one standing clip already reaches most of what they would add.

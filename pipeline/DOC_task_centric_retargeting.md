@@ -64,17 +64,47 @@ The left column is retargeting the motion. The step marked THE TASK is where the
 
 Demonstrated, as of 2026-09-30:
 
-The video-to-policy path works end to end on one clip. The coverage objective is correct — replay of the reference reaches 0.73 coverage, reproducibly, and the rasterizer is verified bitwise-identical to a reference implementation. A policy trained with it reaches 0.795 success and covers 45% of a 342-frame clip, converged. Multi-motion loading works for N clips with per-motion goal regions.
+The video-to-policy path works end to end on one clip. The coverage objective is correct — replay of the reference reaches 0.73 coverage, reproducibly, and the rasterizer is verified bitwise-identical to a reference implementation. Multi-motion loading works for N clips with per-motion goal regions.
+
+A policy trained with it, evaluated from the first frame of the clip with the target where the demo painted it, completes the full 342-frame stroke in 68% of episodes and reaches 0.69 coverage — 94% of what the replayed demonstration itself achieves.
+
+Read training metrics with care. During training every episode starts at a random frame of the clip, and `success` means reaching the end from wherever it started, so the training-time figure (0.795 for this policy) overstates full-stroke performance. The evaluation numbers above start from frame 0 and are the honest ones.
 
 Not demonstrated, and this is the important part:
 
 **That the outcome objective buys generalization the reference alone cannot.** Every number above comes from a policy painting the one rectangle, in the one place, that its demonstration painted. That is HDMI with an extra reward. The claim in the thesis — cover regions the worker never painted — has not been tested, because until the target started moving there was nothing to test.
 
+**The baseline: the fixed-target policy ignores the target**
+
+Measured 2026-09-30, `pipeline/scripts/zsweep_eval.py`, 128 episodes per offset. The target is pinned at vertical offsets from -0.5 to +0.5 m and the fixed-target policy is evaluated at each:
+
+| z offset | coverage | success |
+| --- | --- | --- |
+| -0.50 | 0.331 | 0.60 |
+| -0.30 | 0.532 | 0.71 |
+| -0.10 | 0.604 | 0.62 |
+| 0.00 | 0.690 | 0.68 |
+| +0.10 | 0.634 | 0.68 |
+| +0.30 | 0.508 | 0.74 |
+| +0.50 | 0.304 | 0.67 |
+
+Two things make this a clean baseline rather than just a falling curve.
+
+Coverage falls by almost exactly what geometry predicts for a policy that paints the same spot every time. If the painted region stays put and only the target moves, coverage at an offset is the z=0 coverage scaled by how much of the moved target still overlaps it. Measured coverage matches that prediction to within 0.99-1.19x across the whole range; the small excess is the painted region being a little larger than the target rectangle, not adaptation.
+
+Success does not move with the target — 0.60 to 0.74 at every offset. The robot drops the roller at the same rate wherever the goal is. The coverage loss is entirely the target walking away from where the robot paints.
+
+So the policy is not goal-conditioned at all, and the sweep's own summary line — coverage holding above 80% of z=0 over +-0.2 m — is overlap, not generalization: a 0.85 m target shifted 0.2 m still covers about three quarters of the same wall.
+
 **The experiment that decides it**
 
 Train on `wall_painting_goal`, where the region slides +-0.35 m horizontally and +-0.40 m vertically on the wall and scales 0.7x to 1.3x, with the reference motion unchanged throughout. Then evaluate coverage at held-out target positions, against two baselines: the fixed-target policy evaluated at the same positions (`pipeline/scripts/zsweep_eval.py`), and the reference motion replayed there, which scores whatever the demonstrated stroke happens to cover at a region it was not aimed at.
 
-If the goal-conditioned policy beats both across the range, the claim holds and the pipeline is doing something HDMI does not. If it only matches the fixed-target policy near zero offset and degrades the same way outside it, then the ten tracking terms are still in charge, the outcome objective is decoration, and the honest next move is a motion set or an AMP-style prior in place of phase-indexed tracking — see `DOC_goal_conditioned_study.md`.
+The baseline makes the test sharp. Overlap alone predicts 0.29 coverage at +-0.5 m. A goal-conditioned policy that follows the target should hold well above that at the edges while giving up little at z=0; one that lands near 0.29-0.33 out there is still painting the demonstrated spot.
+
+If the goal-conditioned policy beats the baseline across the range, the claim holds and the pipeline is doing something HDMI does not. If it only matches the fixed-target policy near zero offset and degrades the same way outside it, then the ten tracking terms are still in charge, the outcome objective is decoration, and the honest next move is to replace phase-indexed tracking with something that does not pin the arm to one trajectory — a motion set spanning the postures, or an adversarial motion prior (AMP, Peng et al. 2021) that rewards moving like the demonstration without dictating where.
+
+One caveat for reading the comparison. The fixed-target policy is the product of about 1.05B frames over five runs; the goal-conditioned run gets 450M from scratch, because its extra observation changes the input size and no checkpoint carries over. A small shortfall at z=0 is partly less training. The edges are where the method shows.
 
 Either result is worth having. The second one is worth having sooner rather than later.
 
@@ -82,7 +112,7 @@ Either result is worth having. The second one is worth having sooner rather than
 
 The demonstration paints 0.796-1.649 m with the pelvis fixed at 0.809 m and the feet planted. All of it is arm reach. A target at v = -0.40 sits at 0.40 m, which no amount of arm reach covers from a standing stance.
 
-So there is a ceiling on goal conditioning from one clip that is physical, not algorithmic, and filming the same task with knees bent and in a squat raises it. That is a motion set (`DOC_multi_demo_same_task.md`), and the two code changes it needs are in: `object_contact` concatenates across clips, and each clip carries its own goal region.
+So there is a ceiling on goal conditioning from one clip that is physical, not algorithmic, and filming the same task with knees bent and in a squat raises it. That is a motion set, and the two code changes it needs are in (see the multi-motion section of `DOC_wall_painting_stages.md`): `object_contact` concatenates across clips, and each clip carries its own goal region.
 
 The ordering matters. Randomized targets on one clip tells you where the physical ceiling is. Filming before that measurement risks shooting two videos to solve a problem that was never the binding one.
 
@@ -90,4 +120,6 @@ The ordering matters. Randomized targets on one clip tells you where the physica
 
 Today this is HDMI with a video-derived reference and an outcome-based task objective. That is a real extension and a useful one, and it is not a different pipeline.
 
-What would make it one is a policy that covers regions it was never shown, driven by an objective recovered from the video rather than by the trajectory in it. The machinery for that now exists and the experiment is specified. It has not been run.
+What would make it one is a policy that covers regions it was never shown, driven by an objective recovered from the video rather than by the trajectory in it.
+
+Status, 2026-09-30: the baseline is measured and shows the fixed-target policy is not goal-conditioned. The goal-conditioned run is training (`wall_painting_goal`, 450M frames, started 11:50). The result is the same sweep run on it, compared against the table above.

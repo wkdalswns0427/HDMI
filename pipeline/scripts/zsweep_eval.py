@@ -1,25 +1,39 @@
 #!/usr/bin/env python3
-"""Phase 2: measure how far the wall-painting target can move in z before the
-policy stops covering it.
+"""Measure how far the wall-painting target can move in z before a policy stops
+covering it.
 
-Runs HDMI's play.py once per fixed z offset with the target region PINNED at
-that offset (both ends of target_region_pos_range.z set equal), and reads the
-final coverage off `stats/debug/paint_coverage` -- an unweighted mirror of
-paint_coverage_delta whose episode-accumulated stat is the coverage ratio.
+For each z offset, runs HDMI's play.py with the target region PINNED at that
+offset and records, per block of finished episodes:
 
-    python pipeline/scripts/zsweep_eval.py \
-        --checkpoint HDMI/outputs/.../checkpoint_1000.pt \
-        --offsets -0.20 -0.15 -0.10 -0.05 0.0 0.05 0.10 0.15 0.20
+    coverage     stats/debug/paint_coverage -- unweighted mirror of
+                 paint_coverage_delta, so its episode sum IS the final coverage
+    episode_len  how long episodes last before terminating
+    success      fraction of episodes that reach 90% of max length
 
-The reference clip sweeps z = 0.796 .. 1.649 m with the pelvis fixed at
-0.809 m, so the interesting question is how far below 0.796 the policy holds
-before it would need to bend or squat.
+Coverage alone cannot tell "paints the wrong place" from "drops the roller
+early", so all three are reported.
+
+    python pipeline/scripts/zsweep_eval.py --checkpoint <ckpt>
+
+play.py never exits on its own -- its rollout is `for i in itertools.count()`
+-- so each offset is run as a stream: read play.py's output, stop after
+--blocks stats blocks (each block is num_envs finished episodes), then kill the
+process group. IsaacSim also hangs in teardown, which the group kill covers.
+
+The reference clip paints z = 0.796 .. 1.649 m with the pelvis fixed at
+0.809 m. Offsets are applied to the target centre along world z, which for this
+wall is the in-plane vertical, so the target stays on the wall.
 """
 
 import argparse
 import json
+import os
 import re
+import signal
+import statistics
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 import sys as _sys
@@ -30,13 +44,20 @@ from hdmi_pipeline import paths
 HDMI = paths.HDMI_ROOT
 PY = paths.conda_python("hdmi")
 
-# The stat play.py prints for the unweighted mirror term.
-STAT = re.compile(r"\('stats', 'debug', 'paint_coverage'\)\s+([\d.eE+-]+)")
+# play.py prints each stat as `(<key tuple>) <value>`; one line per key.
+PATTERNS = {
+    "coverage": re.compile(r"\('stats', 'debug', 'paint_coverage'\)\s+([\d.eE+-]+)"),
+    "episode_len": re.compile(r"\('stats', 'episode_len'\)\s+([\d.eE+-]+)"),
+    "success": re.compile(r"\('stats', 'success'\)\s+([\d.eE+-]+)"),
+}
 
 
-def run_one(checkpoint: str, z: float, task: str, num_envs: int,
-            out_dir: Path) -> float | None:
-    """One play.py run with the target pinned at `z`. Returns final coverage."""
+def run_one(checkpoint: str, z: float, task: str, num_envs: int, blocks: int,
+            timeout_s: float, out_dir: Path) -> dict:
+    """Stream one play.py run with the target pinned at `z`.
+
+    Returns {metric: [value per stats block]}; empty lists if nothing parsed.
+    """
     log = out_dir / f"z{z:+.3f}.log"
 
     cmd = [
@@ -44,8 +65,7 @@ def run_one(checkpoint: str, z: float, task: str, num_envs: int,
         f"task=G1/hdmi/{task}",
         # ppo_roa does NOT exist -- the algo configs come from a structured
         # config store, not cfg/algo/*.yaml, and the trained checkpoints all
-        # use ppo_roa_train. Getting this wrong fails instantly in hydra and
-        # every offset silently parses as None.
+        # use ppo_roa_train. Getting it wrong fails instantly in hydra.
         "algo=ppo_roa_train",
         f"checkpoint_path={checkpoint}",
         "headless=true",
@@ -55,27 +75,67 @@ def run_one(checkpoint: str, z: float, task: str, num_envs: int,
         "task.command.target_region_scale_range.height=[1.0,1.0]",
     ]
 
+    # Without this, play.py's stdout is block-buffered into the pipe and stats
+    # arrive in large delayed chunks, or not at all before the kill.
+    env = dict(os.environ, PYTHONUNBUFFERED="1")
+    env.pop("PYTHONNOUSERSITE", None)   # the hdmi env needs ~/.local
+
+    results = {k: [] for k in PATTERNS}
+
     with open(log, "w") as fh:
-        rc = subprocess.run(cmd, cwd=HDMI, stdout=fh, stderr=subprocess.STDOUT,
-                            check=False).returncode
+        proc = subprocess.Popen(
+            cmd, cwd=HDMI, env=env, text=True, bufsize=1,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            start_new_session=True,       # its own process group, for the kill
+        )
 
-    text = log.read_text(errors="ignore")
+        def kill_group():
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
-    # Last reported episode value wins -- earlier ones are partial episodes.
-    values = STAT.findall(text)
-    if values:
-        return float(values[-1])
+        # A hung play.py produces no lines, so a timeout checked inside the
+        # read loop would never fire. A timer kills it from outside instead.
+        watchdog = threading.Timer(timeout_s, kill_group)
+        watchdog.start()
+        try:
+            for line in proc.stdout:
+                fh.write(line)
+                for key, pat in PATTERNS.items():
+                    m = pat.search(line)
+                    if m:
+                        results[key].append(float(m.group(1)))
+                # A block is complete once its coverage line has been seen.
+                if len(results["coverage"]) >= blocks:
+                    break
+        finally:
+            watchdog.cancel()
+            kill_group()
+            proc.wait()
 
-    # No value parsed. Say why, loudly -- a silent None for every offset is
-    # indistinguishable from "the policy scored nothing", and that cost an
-    # hour once already.
-    print(f"    !! no coverage parsed from {log.name} (exit {rc})")
-    for line in text.splitlines():
-        if ("Could not find" in line or "Error" in line
-                or "Traceback" in line or "error" in line.lower()[:40]):
-            print(f"    !! {line.strip()[:120]}")
-            break
-    return None
+    if not results["coverage"]:
+        # Say why, loudly: a silent empty result for every offset looks the
+        # same as "the policy scored nothing", and that cost an hour once.
+        text = log.read_text(errors="ignore")
+        reason = next(
+            (l.strip() for l in text.splitlines()
+             if "Could not find" in l or "Traceback" in l
+             or "Error executing" in l or "RuntimeError" in l),
+            f"no stats block within {timeout_s:.0f}s",
+        )
+        print(f"    !! z={z:+.2f}: nothing parsed -- {reason[:110]}")
+        print(f"    !! full log: {log}")
+
+    return results
+
+
+def summarize(values: list) -> tuple:
+    if not values:
+        return None, None
+    mean = statistics.fmean(values)
+    std = statistics.stdev(values) if len(values) > 1 else 0.0
+    return mean, std
 
 
 def main():
@@ -96,7 +156,12 @@ def main():
                          "target bottom at 0.296 m (squat territory), +0.5 "
                          "puts the top at 2.149 m (out of standing reach). "
                          "Past -0.6 the target passes through the floor.")
-    ap.add_argument("--num_envs", type=int, default=64)
+    ap.add_argument("--num_envs", type=int, default=32)
+    ap.add_argument("--blocks", type=int, default=3,
+                    help="stats blocks to average per offset; each block is "
+                         "num_envs finished episodes")
+    ap.add_argument("--timeout", type=float, default=600.0,
+                    help="seconds per offset before giving up on it")
     ap.add_argument("--out", default=None,
                     help="directory for per-offset logs and results.json")
     args = ap.parse_args()
@@ -107,34 +172,49 @@ def main():
 
     print(f"checkpoint : {args.checkpoint}")
     print(f"task       : {args.task}")
-    print(f"envs       : {args.num_envs}")
+    print(f"envs       : {args.num_envs} x {args.blocks} blocks "
+          f"= {args.num_envs * args.blocks} episodes per offset")
     print(f"logs       : {out_dir}\n")
+    print(f"{'z [m]':>7}  {'coverage':>15}  {'vs z=0':>7}  "
+          f"{'episode_len':>11}  {'success':>7}  {'time':>5}")
+    print("-" * 64)
 
     results = {}
-    print(f"{'z offset [m]':>13}  {'coverage':>9}  {'vs z=0':>8}")
-    print("-" * 34)
-
     for z in args.offsets:
-        cov = run_one(args.checkpoint, z, args.task, args.num_envs, out_dir)
-        results[f"{z:+.3f}"] = cov
-        base = results.get("+0.000")
-        rel = f"{cov / base * 100:7.1f}%" if (cov and base) else "      -"
-        print(f"{z:>+13.3f}  {cov if cov is None else f'{cov:9.4f}'}  {rel}")
+        t0 = time.time()
+        r = run_one(args.checkpoint, z, args.task, args.num_envs,
+                    args.blocks, args.timeout, out_dir)
+        cov, cov_sd = summarize(r["coverage"])
+        el, _ = summarize(r["episode_len"])
+        su, _ = summarize(r["success"])
+        results[f"{z:+.3f}"] = {
+            "coverage": cov, "coverage_std": cov_sd,
+            "episode_len": el, "success": su,
+            "blocks": r["coverage"],
+        }
 
-    (out_dir / "results.json").write_text(json.dumps(results, indent=2))
+        base = results.get("+0.000", {}).get("coverage")
+        rel = f"{cov / base * 100:6.1f}%" if (cov is not None and base) else "      -"
+        cov_s = f"{cov:.4f} +-{cov_sd:.4f}" if cov is not None else "           none"
+        el_s = f"{el:11.1f}" if el is not None else "          -"
+        su_s = f"{su:7.3f}" if su is not None else "      -"
+        print(f"{z:+7.2f}  {cov_s:>15}  {rel:>7}  {el_s}  {su_s}  "
+              f"{time.time() - t0:4.0f}s", flush=True)
+
+        # Write as we go, so a crash partway still leaves the finished rows.
+        (out_dir / "results.json").write_text(json.dumps(results, indent=2))
+
     print(f"\nwrote {out_dir / 'results.json'}")
 
-    ok = {k: v for k, v in results.items() if v is not None}
-    if ok and "+0.000" in ok:
-        base = ok["+0.000"]
-        held = [k for k, v in ok.items() if v >= 0.8 * base]
+    ok = {k: v for k, v in results.items() if v["coverage"] is not None}
+    if "+0.000" in ok:
+        base = ok["+0.000"]["coverage"]
+        held = [float(k) for k, v in ok.items() if v["coverage"] >= 0.8 * base]
         if held:
-            lo = min(float(k) for k in held)
-            hi = max(float(k) for k in held)
-            print(f"\nholds >=80% of the pinned-target coverage over "
-                  f"z = {lo:+.2f} .. {hi:+.2f} m")
-            print("Compare this band against what a bend/squat clip would add "
-                  "(see pipeline/DOC_multi_demo_same_task.md) before filming.")
+            print(f"\nholds >=80% of the z=0 coverage over "
+                  f"z = {min(held):+.2f} .. {max(held):+.2f} m")
+            print("That band is what one standing clip covers without retraining. "
+                  "Compare the goal-conditioned policy against it.")
 
 
 if __name__ == "__main__":
