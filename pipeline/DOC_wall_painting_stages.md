@@ -638,3 +638,153 @@ If it stays on the plateau, the two-stage fallback from scratch: mean contact re
 The bend and squat clips extend downward reach. This result says downward is where one standing clip already follows the target, to about -0.5 m when it holds on.
 
 Stage 5 distillation and canvas collision, as before.
+
+**Run log — 2026-10-01: the plateau broke, and what the paint really looks like**
+
+**More training worked.** 450M more frames from the goal policy's `checkpoint_final.pt`. It sat at episode_len ~60 until iteration ~2000, then climbed: 61.8 at 2000, 81.2 at 2500, 88.6 at the end. Training success 0.20 → 0.38, lost-contact endings 0.75 → 0.49. A flat curve at iteration 1500 was not a reason to stop.
+
+```jsx
+// goal-conditioned policy, continued
+HDMI/outputs/2026-09-30/16-39-43-G1WallPaintingGoal-ppo_roa/
+  wandb/run-20260930_163947-qu02apcr/files/checkpoint_final.pt
+```
+
+**Sweep, re-measured with IoU.** Frame 0, 128 episodes per offset, both policies in `zsweep_iou/` next to their checkpoints. IoU is over completed strokes.
+
+| z offset | fixed-target coverage | success | IoU | goal-conditioned coverage | success | IoU |
+| --- | --- | --- | --- | --- | --- | --- |
+| -0.50 | 0.357 | 0.77 | 0.265 | **0.500** | 0.52 | **0.497** |
+| -0.40 | 0.437 | 0.73 | 0.360 | **0.528** | 0.52 | **0.576** |
+| -0.30 | 0.527 | 0.72 | 0.483 | **0.562** | 0.56 | **0.642** |
+| -0.20 | 0.631 | 0.77 | 0.602 | 0.548 | 0.52 | **0.706** |
+| -0.10 | 0.687 | 0.74 | 0.720 | 0.543 | 0.52 | 0.750 |
+| 0.00 | 0.749 | 0.78 | 0.796 | 0.518 | 0.53 | 0.727 |
+| +0.10 | 0.672 | 0.75 | 0.706 | 0.450 | 0.52 | 0.648 |
+| +0.30 | 0.500 | 0.76 | 0.449 | 0.300 | 0.48 | 0.437 |
+| +0.50 | 0.286 | 0.66 | 0.252 | 0.184 | 0.48 | 0.250 |
+
+It finishes 48-56% of strokes (from 27-30%; the fixed-target policy 66-78%). Mean coverage now beats the fixed-target policy at 0.5 m down (0.500 vs 0.357) and 0.4 m down despite finishing fewer strokes. In completed strokes its IoU is higher at every downward offset and nearly double at -0.5. Against H1: the coverage margin clears 0.10 at -0.5 only, and demo-goal success (0.53 vs 0.78) still fails the guard.
+
+**New measurements.** `eval_episodes.py` now also reports, per episode:
+
+```jsx
+// iou        = cov / (1 + out)   out = wall area painted outside the target / target area
+// precision  = cov / (cov + out) fraction of the paint that landed on the target
+// wall_dist  = mean roller-head distance from the wall plane while painting; contact = 0.042 m
+// work_J     = sum over joints and steps of |tau * qdot| * dt, also legs / waist / arms
+// mean_power_W, torque_rms_Nm, peak_torque_ratio (|tau| / effort limit), J_per_m2 painted
+// per-step joint torque and velocity: zsweep_iou/z<offset>_traces.npz, ~5 MB each
+```
+
+Paint outside the target needs a raster over the whole wall (`track_wall_paint` in the command, 2.000 x 2.349 m read from the canvas USD). It is on by default below 257 envs, so play and evaluation get it and training does not pay for it. The same raster is what play now draws: blue wherever paint lands, outside the amber rectangle too. The evaluator also stops once every env has finished its first episode, about 50 s per offset instead of ~2 min.
+
+**Energy, z=0, completed strokes.**
+
+| | fixed-target | goal, first run | goal, continued |
+| --- | --- | --- | --- |
+| work per stroke | 881 J | 447 J | 672 J |
+| legs / waist / arms | 243 / 126 / 512 J | 196 / 91 / 160 J | 309 / 124 / 239 J |
+| mean power | 129 W | 66 W | 98 W |
+| work per m² painted | 1858 J | 1077 J | 1508 J |
+| peak torque / limit | 1.00 | 0.98 | 1.00 |
+
+The fixed-target policy does twice the arm work of the continued goal policy. The joints at their limits are the 5 N·m wrist yaw and pitch, saturated on 1-3% of steps, then right shoulder pitch: holding the roller is wrist-limited, which matters for the static hand.
+
+**The paint is not laid at the wall.** The rasterizer projects the roller onto the wall plane from any distance, and the wall has no collision. While painting, the fixed-target policy holds the roller head 0.056-0.077 m from the wall (1.4-3.5 cm short of contact), and the continued goal policy 0.004-0.041 m (up to 4 cm inside the wall at low targets). Every coverage number in this log is projected coverage. Wall collision and contact-gated paint are a prerequisite for the next training round, not a refinement.
+
+**Run log — 2026-10-01 evening: a solid wall, and the H1-2 port**
+
+**Contact-gated paint is a new task, `wall_painting_goal_contact`.** It is wall_painting_goal plus four command settings, all off by default so every older task is unchanged:
+
+```jsx
+wall_collision: true          // spawns canvas_collide (plate collider, friction 0.1) and a tool-wall contact sensor
+paint_gate: force             // "none" (the old projection) | "force" | "distance"
+paint_force_min: 2.0          // N; the tool must press this hard at BOTH ends of a step
+wall_normal_offset_range: [-0.02, 0.02]   // the wall, and the target on it, shift along the normal per episode
+```
+
+Friction is 0.1 because the sim roller head is part of one rigid body and slides where a real roller rolls. Paint needs contact at both ends of a step, or lifting off, moving and touching down would paint the gap in one quad. Observations are unchanged, so wall_painting_goal checkpoints load.
+
+**The demonstration itself does not touch a flat wall.** The reference roller head sits on average exactly one radius from the fitted plane, as the fit requires, but with a 2.6 cm spread: hovering up to 6 cm off in places, 5 cm into the plane at one end. With a solid wall the policy has to press the roller on, not replay the reference.
+
+**The current goal policy on it.** Continued goal policy at z=0, 128 episodes: coverage 0.52 → 0.14, success 0.53 → 0.33. Its paint now happens at 0.048 m from the wall, touching, with 18-24 N. Training on projected paint does not carry over to contact paint.
+
+**Fine-tune queued** from the continued goal checkpoint, 450M frames, starting once ce's run on the shared GPU exits:
+
+```jsx
+$PY_HDMI scripts/train.py algo=ppo_roa_train task=G1/hdmi/wall_painting_goal_contact \
+  checkpoint_path=<continued goal checkpoint_final.pt> total_frames=450_000_000 save_interval=50
+```
+
+**H1-2 port.** Same video and GVHMR prediction, retargeted by GMR to H1-2:
+
+```jsx
+// motion   data/motion/data_for_sim/wall_painting2_h1_2      342 frames, 27 dof
+// grip     0.873 m between the wrists (G1 0.503 m): GMR scales the motion to the robot
+// roller   roller_h1_2: same head, pole 0.370 m longer at the bottom (make_roller_usd.py --pole_extension)
+// grips    axis_offset 1.070; contact targets at z -0.197 (left) and -1.070 (right)
+// target   0.802 x 0.830 m at z 1.028-1.858 m (G1: 0.602 x 0.853 at 0.796-1.649); plane rmse 4.6 cm (G1 3.1)
+// replay   the demo covers 0.704 of its own target, offline (G1 0.742)
+// wall     canvas_h1_2_collide, 2.0 x 2.558 m
+// task     cfg/task/H1_2/hdmi/wall_painting_goal_contact_h1_2.yaml
+```
+
+The three task_info scripts now take `--task`, `--axis_offset` and `--no_show`; with G1 defaults they reproduce wall_painting2's files exactly, and plotly is only needed for the interactive figure. H1-2 trains from scratch, 900M frames, queued after the G1 fine-tune. The capsule end-effector stands in until the static hand exists; it goes in through `make_h1_2_eef.py`.
+
+**Run log — 2026-10-02 early: the contact fine-tune**
+
+450M frames on `wall_painting_goal_contact` from the continued goal checkpoint, 21:14 → 00:43. Training (random starts): episode_len 83.5 → 136.2, success 0.36 → 0.70, lost-contact endings 0.48 → 0.21, coverage per episode 0.02 → 0.14, pressing 22-26 N while painting. The grip is better than the projected-paint run ever got; a solid wall to push against seems to help hold the roller.
+
+```jsx
+HDMI/outputs/2026-10-01/21-14-58-G1WallPaintingGoalContact-ppo_roa/
+  wandb/run-20261001_211501-981atm80/files/checkpoint_final.pt      // sweep in zsweep/ next to it
+```
+
+Sweep, frame 0, 128 episodes per offset, paint only on contact. Overlap-only is drawn from its own z=0 value.
+
+| z offset | coverage | success | coverage, completed strokes | overlap-only | ratio | precision |
+| --- | --- | --- | --- | --- | --- | --- |
+| -0.50 | 0.233 | 0.77 | 0.299 | 0.185 | **1.62** | 0.57 |
+| -0.40 | 0.274 | 0.74 | 0.364 | 0.237 | **1.54** | 0.70 |
+| -0.30 | 0.314 | 0.73 | 0.419 | 0.289 | **1.45** | 0.83 |
+| -0.20 | 0.355 | 0.74 | 0.474 | 0.342 | **1.39** | 0.95 |
+| 0.00 | 0.313 | 0.70 | 0.446 | 0.446 | 1.00 | 0.97 |
+| +0.20 | 0.233 | 0.71 | 0.322 | 0.342 | 0.94 | 0.78 |
+| +0.50 | 0.072 | 0.65 | 0.110 | 0.185 | 0.60 | 0.27 |
+
+It finishes 65-77% of strokes from frame 0, the fixed-target policy's level: gate A1 (≥0.60) is met. Paint is real now: 0.046-0.048 m from the wall while painting, 21-27 N. Coverage is much lower than projected paint suggested (0.45 of the target in a completed stroke at z=0, against 0.87), and almost all of it lands on the target (precision 0.97). Downward following survives contact, 1.39-1.62x its overlap line from 0.2 m to 0.5 m down; upward it still falls below the line.
+
+There is no baseline under these physics yet. The fixed-target policy was trained on projected paint and would fail on the solid wall for the same reason this one did before its fine-tune, so H1 under contact needs a fixed-target contact task (`wall_painting2_both` with the same four settings) fine-tuned the same way.
+
+**H1-2 training started 00:46**, from scratch, 900M frames (6866 iterations, ~7.5 h). At iteration 128 it sits at the 25-step floor (episode_len 25.5, both hands 0.002), as both from-scratch G1 runs did early. The G1 goal run was still at 34 by iteration 1140 before climbing. If H1-2 is still at the floor by iteration ~1500, the fallback is the mean contact reward first, then product.
+
+**Run log — 2026-10-02 morning: the H1-2 result, and a retargeting artifact**
+
+H1-2 trained from scratch, 900M frames, 00:46 → 06:53. Faster off the floor than the from-scratch G1 run (episode_len 39 vs 33 at iteration 1000), ending at episode_len 121, success 0.62 (random starts).
+
+**From frame 0 it failed completely**: success 0.01-0.03, 90% of episodes ending on lost contact after ~31 steps. Starting the same policy later in the clip (`eval_start_frame`, new, evaluation only) found it:
+
+```jsx
+// start frame   0     2     3     5     10    30    60    120
+// success       0.02  0.56  0.65  0.75  0.72  0.44  0.84  0.77
+```
+
+The H1-2 reference's first two frames carry a GMR IK start-up transient: hip yaw 7.2 rad/s and torso 6.6 rad/s on joints whose later 95th percentile is under 0.6 rad/s. Episodes start with the reference velocity, so every frame-0 episode began with the robot twisting hard enough to lose the roller. G1's clip has the same transient at 1.6 rad/s, which it tolerates.
+
+**Fix: trim it from the data.** `gmr_to_hdmi.py --trim 3:` drops the first 3 GMR frames (0.1 s); the clip is now 337 frames, opening joint speeds 1.2-1.4 rad/s, and the recovered paint target moves by under 0.4 mm. The untrimmed motion and task_info are kept as `wall_painting2_h1_2_untrimmed`. G1's motion is unchanged, so every G1 result stands.
+
+**Sweep on the trimmed reference, same checkpoint, no retraining.** Frame 0, 128 episodes per offset, contact-gated paint. The H1-2 target is 0.830 m tall, so its overlap line differs from G1's.
+
+| z offset | success | coverage, completed strokes | overlap-only | ratio |
+| --- | --- | --- | --- | --- |
+| -0.50 | 0.64 | 0.145 | 0.102 | **1.42** |
+| -0.40 | 0.66 | 0.199 | 0.133 | **1.49** |
+| -0.30 | 0.59 | 0.266 | 0.165 | **1.62** |
+| -0.20 | 0.67 | 0.268 | 0.196 | **1.37** |
+| 0.00 | 0.67 | 0.258 | 0.258 | 1.00 |
+| +0.30 | 0.67 | 0.137 | 0.165 | 0.83 |
+| +0.50 | 0.68 | 0.033 | 0.102 | 0.32 |
+
+H1-2 finishes 59-72% of strokes from frame 0 and paints at contact (0.050-0.052 m from the wall). It covers less than G1 per completed stroke (0.26 vs 0.45 at the demo goal) and spends more doing it (5455 vs 3350 J per m² painted). Its downward goal-following, 1.37-1.62x its overlap line from 0.2 m to 0.5 m down, matches G1's 1.39-1.62x: the same video-derived objective gives the same behaviour on two robots.
+
+`J_per_m2` in `eval_episodes.py` is now total work over total painted area; the earlier per-episode mean blew up on episodes that paint almost nothing. Sweeps run before this have the old column.

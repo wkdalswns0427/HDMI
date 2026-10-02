@@ -12,6 +12,23 @@ from isaaclab.utils.math import sample_uniform, quat_from_euler_xyz, quat_mul, q
 from tensordict import TensorDict
 from omegaconf import ListConfig
 from active_adaptation.utils.math import batchify
+
+
+def _canvas_size_from_usd(asset: str = "canvas") -> Tuple[float, float] | None:
+    """(width, height) in m of the wall plate in a canvas USD that
+    pipeline/scripts/make_canvas_usd.py writes (a unit cube scaled to
+    width x height x thickness), or None if it cannot be read."""
+    try:
+        from pxr import Usd
+        from active_adaptation.assets.objects import ASSET_PATH
+        stage = Usd.Stage.Open(f"{ASSET_PATH}/objects/{asset}/{asset}.usd")
+        for prim in stage.Traverse():
+            if prim.GetName() == "plate":
+                scale = prim.GetAttribute("xformOp:scale").Get()
+                return float(scale[0]), float(scale[1])
+    except Exception:
+        pass
+    return None
 quat_apply = batchify(quat_apply)
 quat_apply_inverse = batchify(quat_apply_inverse)
 torch.set_printoptions(precision=3, sci_mode=False, linewidth=120)
@@ -47,6 +64,9 @@ class RobotTracking(Command):
         sample_motion: bool = False,
         replay_motion: bool = False,
         record_motion: bool = False,
+        # Evaluation (not env.training) starts every episode at this frame
+        # instead of 0, e.g. to tell a clip-start problem from a general one.
+        eval_start_frame: int = 0,
     ):
         from . import observations
         from . import rewards
@@ -106,6 +126,7 @@ class RobotTracking(Command):
         self.sample_motion = sample_motion
         self.replay_motion = replay_motion
         self.record_motion = record_motion
+        self.eval_start_frame = eval_start_frame
 
         if self.replay_motion:
             self.pose_range.fill_(0.0)
@@ -144,8 +165,12 @@ class RobotTracking(Command):
         else:
             start_t = torch.randint(*self.reset_range, (len(env_ids),), device=self.device)
             
-        if not self.env.training or self.record_motion:
+        if self.record_motion:
             start_t.fill_(0)
+        elif not self.env.training:
+            start_t = torch.minimum(
+                torch.full_like(start_t, self.eval_start_frame), motion_len - 1
+            )
 
         if self.replay_motion:
             self.replay_motion_t[env_ids] = (self.replay_motion_t[env_ids] + 1) % motion_len
@@ -391,8 +416,34 @@ class RobotObjectTracking(RobotTracking):
         coverage_grid_size: int = 4,
         show_canvas: bool = True,
         paint_resolution: float = 0.005,
+        # Also track paint over the whole wall, not just inside the target:
+        # what lands outside the amber rectangle, for IoU and for the debug
+        # draw. None = on when num_envs <= 256 (play, evaluation) and off for
+        # training-size runs, where a wall-sized raster per env costs memory
+        # for a number the reward does not use.
+        track_wall_paint: bool | None = None,
+        # Wall extent (width, height) in m for that raster. None reads the
+        # canvas USD that make_canvas_usd.py wrote.
+        wall_size: Tuple[float, float] | None = None,
+        # Solid wall and contact-gated paint (the *_contact tasks).
+        # wall_collision spawns the collidable canvas and a tool-wall contact
+        # sensor. paint_gate decides when a sweep counts as paint:
+        #   "none"     -- any sweep, at any distance (the original tasks)
+        #   "force"    -- only while the tool presses on the wall with at least
+        #                 paint_force_min newtons, at both ends of the step
+        #   "distance" -- only while the roller head is within paint_dist_tol
+        #                 of touching the wall plane, at both ends of the step
+        wall_collision: bool = False,
+        canvas_asset: str | None = None,
+        paint_gate: str = "none",
+        paint_force_min: float = 1.0,
+        paint_dist_tol: float = 0.01,
+        # Per-episode shift of the wall (and the target on it) along the wall
+        # normal, in m: the robot meets a wall that is not exactly where the
+        # demonstration's was.
+        wall_normal_offset_range: Tuple[float, float] = (0.0, 0.0),
         roller_head_length: float = 0.22913713,
-        # roller_head_radius: float = 0.042458495,
+        roller_head_radius: float = 0.042458495,
         **kwargs
     ):
         super().__init__(**kwargs, call_update=False)
@@ -472,6 +523,22 @@ class RobotObjectTracking(RobotTracking):
         self.target_region_path = target_region_path
         self.coverage_grid_size = coverage_grid_size
         self.show_canvas = show_canvas
+        self.track_wall_paint = track_wall_paint
+        self.wall_size = wall_size
+        self.wall_collision = wall_collision
+        self.canvas_asset = canvas_asset or ("canvas_collide" if wall_collision else "canvas")
+        assert paint_gate in ("none", "force", "distance"), paint_gate
+        assert paint_gate != "force" or wall_collision, \
+            "paint_gate: force needs wall_collision: true (it reads the tool-wall contact sensor)"
+        self.paint_gate = paint_gate
+        self.paint_force_min = paint_force_min
+        self.paint_dist_tol = paint_dist_tol
+        self.wall_normal_offset_range = tuple(wall_normal_offset_range)
+        self.roller_head_radius = roller_head_radius
+        # Tool-wall contact force, filtered to the canvas body (solid wall only).
+        self.tool_wall_sensor = (
+            self.env.scene.sensors["tool_wall_contact_forces"] if wall_collision else None
+        )
         # Present only when locomotion.py spawned it (painting tasks, canvas on).
         self.canvas = self.env.scene.rigid_objects.get("canvas", None)
 
@@ -547,6 +614,9 @@ class RobotObjectTracking(RobotTracking):
                 dtype=torch.float32,
                 device=self.device,
             )
+            # Outward wall normal, toward the painter (see _place_canvas).
+            normal = torch.linalg.cross(self.wall_axis_u_w, self.wall_axis_v_w)
+            self.wall_normal_w = normal / normal.norm().clamp_min(1e-8)
 
             # Position randomization range in world coordinates.
             pos_range_list = [
@@ -704,6 +774,54 @@ class RobotObjectTracking(RobotTracking):
                 device=self.device,
             )
 
+            # Diagnostics read by the paint_* debug rewards. The rasterizer
+            # projects the roller onto the wall whatever its distance, so the
+            # roller-head distance from the wall plane is recorded alongside.
+            self.roller_wall_dist = torch.zeros(self.num_envs, 1, device=self.device)
+            self.painting_step = torch.zeros(self.num_envs, 1, device=self.device)
+            # Wall area painted outside the target, as a fraction of the
+            # target's area; zero unless the whole wall is tracked.
+            self.paint_outside_ratio = torch.zeros(self.num_envs, 1, device=self.device)
+            self.paint_outside_delta = torch.zeros(self.num_envs, 1, device=self.device)
+            # Contact gate state: tool-wall normal force, whether the tool was
+            # in paint contact at the end of the previous step, and this
+            # episode's wall shift along its normal.
+            self.tool_wall_force = torch.zeros(self.num_envs, 1, device=self.device)
+            self.prev_paint_contact = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+            self.wall_offset = torch.zeros(self.num_envs, device=self.device)
+
+            if self.track_wall_paint is None:
+                self.track_wall_paint = self.num_envs <= 256
+            if self.track_wall_paint:
+                # Same cell size as the target raster, laid over the whole
+                # wall in the canvas's own frame: origin at the bottom edge
+                # under motion 0's target (where _place_canvas puts it), u
+                # along axis_u in [-W/2, W/2], v up from the floor in [0, H].
+                size = self.wall_size or _canvas_size_from_usd(self.canvas_asset) or (2.0, 2.5)
+                self.wall_width, self.wall_height = float(size[0]), float(size[1])
+                self.wall_grid_width = int(np.ceil(self.wall_width / self.paint_resolution))
+                self.wall_grid_height = int(np.ceil(self.wall_height / self.paint_resolution))
+                self._wall_u = (
+                    torch.arange(self.wall_grid_width, device=self.device, dtype=torch.float32)
+                    + 0.5
+                ) * self.paint_resolution - 0.5 * self.wall_width
+                self._wall_v = (
+                    torch.arange(self.wall_grid_height, device=self.device, dtype=torch.float32)
+                    + 0.5
+                ) * self.paint_resolution
+                wall_origin = self.nominal_target_center_w[0].clone()
+                wall_origin[2] = 0.0
+                self.wall_origin_w = wall_origin.unsqueeze(0) + self.env.scene.env_origins
+                self.wall_paint_mask = torch.zeros(
+                    self.num_envs, self.wall_grid_height, self.wall_grid_width,
+                    dtype=torch.bool, device=self.device,
+                )
+                print(
+                    f"[paint] tracking the whole wall: {self.wall_width:.3f} x "
+                    f"{self.wall_height:.3f} m, {self.wall_grid_height}x"
+                    f"{self.wall_grid_width} cells per env"
+                )
+
         # Load object contact data. One array per motion, concatenated in the same
         # order MotionDataset used, because it is addressed below by the dataset's
         # global index (motion_starts + t), not by a per-motion index.
@@ -774,11 +892,20 @@ class RobotObjectTracking(RobotTracking):
             + uv_offset[:, 1:2] * self.wall_axis_v_w.unsqueeze(0)
         )
 
+        # The wall itself may sit a little off the demonstration's plane; the
+        # target is ON the wall, so it moves with it.
+        wall_offset = sample_uniform(
+            self.wall_normal_offset_range[0], self.wall_normal_offset_range[1],
+            (num_envs,), device=self.device,
+        )
+        self.wall_offset[env_ids] = wall_offset
+
         center_w = (
             self.nominal_target_center_w[mids]
             + self.env.scene.env_origins[env_ids]
             + pos_offset
             + inplane
+            + wall_offset.unsqueeze(1) * self.wall_normal_w.unsqueeze(0)
         )
 
         self.target_center_w[env_ids] = center_w
@@ -821,6 +948,19 @@ class RobotObjectTracking(RobotTracking):
             self.coverage_ratio[env_ids] = 0.0
             self.coverage_delta[env_ids] = 0.0
             self.prev_head_valid[env_ids] = False
+            self.paint_outside_ratio[env_ids] = 0.0
+            self.paint_outside_delta[env_ids] = 0.0
+            self.painting_step[env_ids] = 0.0
+            self.prev_paint_contact[env_ids] = False
+            if self.track_wall_paint:
+                self.wall_paint_mask[env_ids] = False
+        if self.track_wall_paint:
+            wall_origin = self.nominal_target_center_w[0].clone()
+            wall_origin[2] = 0.0
+            self.wall_origin_w[env_ids] = (
+                wall_origin.unsqueeze(0) + self.env.scene.env_origins[env_ids]
+                + self.wall_offset[env_ids].unsqueeze(1) * self.wall_normal_w.unsqueeze(0)
+            )
 
     def _place_canvas(self, env_ids: torch.Tensor) -> None:
         """Stand the wall on the ground, in the plane the target lives in.
@@ -843,15 +983,17 @@ class RobotObjectTracking(RobotTracking):
         if self.canvas is None:
             return
 
-        normal = torch.linalg.cross(self.wall_axis_u_w, self.wall_axis_v_w)
-        normal = normal / normal.norm().clamp_min(1e-8)
+        normal = self.wall_normal_w
 
         rot = torch.stack([self.wall_axis_u_w, self.wall_axis_v_w, normal], dim=-1)
         quat = quat_from_matrix(rot).unsqueeze(0).expand(len(env_ids), -1)
 
         base = self.nominal_target_center_w[0].clone()
         base[2] = 0.0                                   # origin = bottom edge
-        pos = base.unsqueeze(0) + self.env.scene.env_origins[env_ids]
+        pos = (
+            base.unsqueeze(0) + self.env.scene.env_origins[env_ids]
+            + self.wall_offset[env_ids].unsqueeze(1) * normal.unsqueeze(0)
+        )
 
         pose = torch.cat([pos, quat], dim=-1)
         self.canvas.write_root_link_pose_to_sim(pose, env_ids=env_ids)
@@ -884,6 +1026,30 @@ class RobotObjectTracking(RobotTracking):
         half_length = 0.5 * self.roller_head_length
         endpoint_a_w = head_center_w - half_length * head_axis_w
         endpoint_b_w = head_center_w + half_length * head_axis_w
+
+        # Roller-head distance from the wall plane (positive on the painter's
+        # side; touching = roller_head_radius) and the tool-wall force, which
+        # decide whether this step's sweep is paint (paint_gate).
+        self.roller_wall_dist[:, 0] = (
+            (head_center_w - self.target_center_w) * self.wall_normal_w.unsqueeze(0)
+        ).sum(-1)
+        if self.tool_wall_sensor is not None:
+            force_w = self.tool_wall_sensor.data.force_matrix_w[:, 0, 0]
+            self.tool_wall_force[:, 0] = (force_w * self.wall_normal_w.unsqueeze(0)).sum(-1).abs()
+        if self.paint_gate == "force":
+            in_contact = self.tool_wall_force[:, 0] >= self.paint_force_min
+        elif self.paint_gate == "distance":
+            in_contact = self.roller_wall_dist[:, 0] <= self.roller_head_radius + self.paint_dist_tol
+        else:
+            in_contact = torch.ones(num_envs, dtype=torch.bool, device=self.device)
+        # A sweep is paint only if the tool touched the wall at both ends of
+        # the step; otherwise lifting off, moving and touching down again
+        # would paint the whole gap in one quad.
+        if self.paint_gate == "none":
+            paint_ok = in_contact
+        else:
+            paint_ok = in_contact & self.prev_paint_contact
+        self.prev_paint_contact = in_contact
 
         # 2. Project both endpoints into the wall's (u, v) frame.
         axis_u = self.wall_axis_u_w.unsqueeze(0)
@@ -937,8 +1103,9 @@ class RobotObjectTracking(RobotTracking):
 
         # 6. An env whose previous line is not yet valid seeds prev and paints
         #    nothing this step, exactly as the per-env version did.
+        #    The contact gate (paint_ok) folds in here too.
         valid = self.prev_head_valid
-        swept &= valid.view(num_envs, 1, 1)
+        swept &= (valid & paint_ok).view(num_envs, 1, 1)
 
         self.paint_mask |= swept
 
@@ -947,13 +1114,71 @@ class RobotObjectTracking(RobotTracking):
         new_ratio = self.paint_mask.sum(dim=(1, 2)).float() / active_count
         self.coverage_ratio[:, 0] = torch.where(valid, new_ratio, self.coverage_ratio[:, 0])
 
+        # 8. The same sweep over the whole wall, for paint outside the target.
+        #    Must run before the line below: `valid` aliases prev_head_valid.
+        new_outside = (
+            self._update_wall_paint(quad, orientation, valid & paint_ok)
+            if self.track_wall_paint else None
+        )
+
         # Current line becomes the previous line for the next sweep.
         self.prev_head_a_uv = curr_a
         self.prev_head_b_uv = curr_b
         self.prev_head_valid[:] = True
 
-        # 8. Newly covered fraction during this timestep.
+        # 9. Newly covered fraction during this timestep.
         self.coverage_delta[:, 0] = (self.coverage_ratio[:, 0] - old_coverage).clamp_min(0.0)
+
+        # 10. Whether this step added paint anywhere.
+        painted = self.coverage_delta[:, 0] > 0.0
+        if new_outside is not None:
+            painted |= new_outside > 0
+        self.painting_step[:, 0] = painted.float()
+
+    def _update_wall_paint(
+        self, quad: torch.Tensor, orientation: torch.Tensor, valid: torch.Tensor
+    ) -> torch.Tensor:
+        """Rasterize this step's sweep over the whole wall (track_wall_paint).
+
+        `quad` is in target-centred (u, v); shifting it by the target centre's
+        wall coordinates puts it in the wall raster's frame. Sets
+        paint_outside_delta to the newly painted area outside the target, as a
+        fraction of the target's area, and returns the newly painted outside
+        cell count per env. Inside/outside is a cell-centre test against the
+        target rectangle.
+        """
+        n = self.num_envs
+        rel = self.target_center_w - self.wall_origin_w
+        cu = (rel * self.wall_axis_u_w.unsqueeze(0)).sum(-1)
+        cv = (rel * self.wall_axis_v_w.unsqueeze(0)).sum(-1)
+        wquad = quad + torch.stack([cu, cv], dim=-1).unsqueeze(1)
+
+        u = self._wall_u.view(1, 1, -1)
+        v = self._wall_v.view(1, -1, 1)
+
+        swept = valid.view(n, 1, 1).expand(
+            n, self.wall_grid_height, self.wall_grid_width
+        ).clone()
+        for edge_idx in range(4):
+            p0 = wquad[:, edge_idx]
+            p1 = wquad[:, (edge_idx + 1) % 4]
+            ex = orientation * (p1[:, 0] - p0[:, 0]).view(n, 1, 1)
+            ey = orientation * (p1[:, 1] - p0[:, 1]).view(n, 1, 1)
+            swept &= (
+                ex * (v - p0[:, 1].view(n, 1, 1)) - ey * (u - p0[:, 0].view(n, 1, 1))
+            ) >= 0.0
+
+        inside = (
+            ((u - cu.view(n, 1, 1)).abs() <= 0.5 * self.target_width[:, 0].view(n, 1, 1))
+            & ((v - cv.view(n, 1, 1)).abs() <= 0.5 * self.target_height[:, 0].view(n, 1, 1))
+        )
+        new_outside = (swept & ~self.wall_paint_mask & ~inside).sum(dim=(1, 2)).float()
+        self.wall_paint_mask |= swept
+
+        target_area = (self.target_width[:, 0] * self.target_height[:, 0]).clamp_min(1e-9)
+        self.paint_outside_delta[:, 0] = new_outside * self.paint_resolution ** 2 / target_area
+        self.paint_outside_ratio[:, 0] += self.paint_outside_delta[:, 0]
+        return new_outside
 
     
     def sample_init(self, env_ids):
@@ -1180,6 +1405,23 @@ class RobotObjectTracking(RobotTracking):
         self.env.debug_draw.vector(
             starts, ends - starts, color=(1.0, 0.85, 0.2, 1.0), size=3.0,
         )
+
+        # With the whole wall tracked, dot every painted cell on it, so paint
+        # that missed the amber rectangle shows too.
+        if self.track_wall_paint:
+            mask = self.wall_paint_mask[:n, ::stride, ::stride]
+            if not bool(mask.any()):
+                return
+            env_i, row_i, col_i = torch.nonzero(mask, as_tuple=True)
+            u = self._wall_u[col_i * stride]
+            v = self._wall_v[row_i * stride]
+            pts = (
+                self.wall_origin_w[env_i]
+                + u.unsqueeze(-1) * self.wall_axis_u_w.unsqueeze(0)
+                + v.unsqueeze(-1) * self.wall_axis_v_w.unsqueeze(0)
+            )
+            self.env.debug_draw.point(pts, color=(0.15, 0.55, 1.0, 1.0), size=6.0)
+            return
 
         # Painted cells, subsampled, as points on the wall plane.
         mask = self.paint_mask[:n, ::stride, ::stride]            # [n, h, w]

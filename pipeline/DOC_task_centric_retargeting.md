@@ -14,7 +14,7 @@ The gap between those two is the whole point of this pipeline. Everything below 
 
 HDMI tracks a single reference motion and rewards imitation. Ten tracking terms compare the robot to the reference frame by frame, indexed by a phase variable. Two object terms keep the manipulated object on its demonstrated path. A contact term keeps the hands on it. A teacher/student split (regularized online adaptation) handles the sim-to-real gap.
 
-Every one of those rewards is defined against the demonstration. Nothing in HDMI knows what the task *was*. The suitcase policy moves a suitcase along one path; the door policy opens one door through one arc. They are excellent trajectory trackers and they are specialists by construction — the upstream FAQ puts useful generalization at roughly 10-20 cm of object displacement, because contact targets live in the object frame and the object observation is real goal conditioning as far as it goes. Push past that and the ten tracking terms outvote the task.
+Every one of those rewards is defined against the demonstration. Nothing in HDMI knows what the task *was*. The suitcase policy moves a suitcase along one path; the door policy opens one door through one arc. They are excellent trajectory trackers and they are specialists by construction. The upstream FAQ randomizes initial object placement over about 10-20 cm (20 cm for door opening, 10 cm for the bread box); contact targets live in the object frame, so the object observation is real goal conditioning within that range. Nothing rewards the task itself, so nothing pulls the robot toward goals much beyond it.
 
 HDMI also assumes you already have retargeted motion. It ships with data derived from mocap and from OMOMO. Getting from a phone video of a construction worker to `motion.npz` is not part of it.
 
@@ -127,6 +127,8 @@ By the test above it fails: mean coverage is below the fixed-target policy at ev
 Take the drop rate out and the thesis shows up. In the episodes that finish, the goal-conditioned policy covers 0.639 of a target moved 0.5 m down, against the baseline's 0.440 and against 0.338 for painting its own z=0 spot. The margin grows with the offset. That is a policy painting a region its demonstration never painted, because the objective told it where.
 
 It does not follow upward. Above z=0 it paints like a fixed-spot policy and sits below the baseline, and its whole painted band is lower than the demo's, topping out near 1.55 m against the demo's 1.649 m. Up is mostly out of standing reach anyway, which is why the result is "down only" rather than "no".
+
+Update, 2026-10-01: after 450M more frames it finishes 48-56% of strokes, and its mean coverage beats the fixed-target policy at 0.5 m down (0.50 vs 0.36) and 0.4 m down (0.53 vs 0.44). Its IoU with the target in completed strokes, 0.50 against 0.27 at 0.5 m down, says it paints the moved target rather than the old spot. One caveat covers every number here: coverage is projected, because the wall has no collision and paint does not require contact (see the 2026-10-01 run log in `DOC_wall_painting_stages.md`).
 
 So the effect is real in the reachable direction and masked by a weak grip. The comparison is not yet even: 450M frames with the product contact reward from a cold start, against 1.05B and a mean-then-product curriculum for the baseline. The next measurement is the same sweep after more training, with success from frame 0 as the number that has to move. Details and commands are in the 2026-09-30 evening run log of `DOC_wall_painting_stages.md`.
 

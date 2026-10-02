@@ -26,6 +26,15 @@ import argparse, sys
 _ap = argparse.ArgumentParser(add_help=False)
 _ap.add_argument("--name", default="roller")
 _ap.add_argument("--mass", type=float, default=2.5)
+# A longer robot holds the roller with its hands farther apart, because GMR
+# scales the human motion to the robot. Lengthen the pole BELOW the hands and
+# keep the head where it is, so the head geometry the paint rasterizer uses
+# (command.py roller_head_center_b) stays valid. H1-2: grip span 0.873 m vs
+# G1 0.503 m, so --pole_extension 0.370.
+_ap.add_argument("--pole_extension", type=float, default=0.0,
+                 help="extra pole length added at the bottom end, in m")
+_ap.add_argument("--com_z", type=float, default=0.05,
+                 help="centre of mass along the pole axis, in the roller frame")
 ARGS, _rest = _ap.parse_known_args()
 sys.argv = [sys.argv[0]]
 
@@ -59,12 +68,12 @@ body = UsdGeom.Xform.Define(stage, f"/{NAME}/{NAME}")
 UsdPhysics.RigidBodyAPI.Apply(body.GetPrim())
 mass = UsdPhysics.MassAPI.Apply(body.GetPrim())
 mass.CreateMassAttr(MASS)
-mass.CreateCenterOfMassAttr(Gf.Vec3f(0.0, 0.0, 0.05))
+mass.CreateCenterOfMassAttr(Gf.Vec3f(0.0, 0.0, ARGS.com_z))
 
 pole_radius = 0.020865
-pole_total_length = 1.0
+pole_total_length = 1.0 + ARGS.pole_extension
 pole_height = pole_total_length - 2.0 * pole_radius
-pole_center_z = (-0.82553955 + 0.17446045) / 2.0
+pole_center_z = (-0.82553955 - ARGS.pole_extension + 0.17446045) / 2.0
 
 pole = UsdGeom.Capsule.Define(stage, f"/{NAME}/{NAME}/pole")
 pole.CreateRadiusAttr(pole_radius)

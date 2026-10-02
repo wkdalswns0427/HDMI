@@ -80,6 +80,13 @@ reward:
     paint_coverage:
       weight: 1.0
       enabled: false
+    # Paint outside the target (IoU = cov / (1 + out)), painting steps, and the
+    # roller's distance from the wall while painting (total / paint_steps).
+    # Read-only like paint_coverage; outside paint needs track_wall_paint,
+    # which is on by default below 257 envs.
+    paint_outside: {weight: 1.0, enabled: false}
+    paint_steps: {weight: 1.0, enabled: false}
+    paint_wall_dist: {weight: 1.0, enabled: false}
 
 randomization:
   object_body_randomization:

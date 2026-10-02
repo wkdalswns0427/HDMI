@@ -33,8 +33,16 @@ from pathlib import Path as _Path
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 from hdmi_pipeline import paths
 
-INPUT_PATH = paths.TASK_INFO / "wall_painting2" / "roller_fitted_plane.npz"
-OUTPUT_PATH = paths.TASK_INFO / "wall_painting2" / "paint_target_rectangle.npz"
+import argparse as _argparse
+_ap = _argparse.ArgumentParser()
+_ap.add_argument("--task", default="wall_painting2",
+                 help="motion under data/motion/data_for_sim/ and output dir under task_info/")
+_ap.add_argument("--no_show", action="store_true",
+                 help="save the outputs without opening a window")
+ARGS = _ap.parse_args()
+
+INPUT_PATH = paths.TASK_INFO / ARGS.task / "roller_fitted_plane.npz"
+OUTPUT_PATH = paths.TASK_INFO / ARGS.task / "paint_target_rectangle.npz"
 
 
 # ============================================================
@@ -397,4 +405,5 @@ ax.grid(alpha=0.2)
 ax.legend()
 
 plt.tight_layout()
-plt.show()
+if not ARGS.no_show:
+    plt.show()

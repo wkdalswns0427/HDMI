@@ -368,6 +368,53 @@ class paint_coverage(RobotObjectTrackReward):
     def compute(self):
         return self.command_manager.coverage_delta
 
+
+class paint_outside(RobotObjectTrackReward):
+    """Wall area newly painted OUTSIDE the target this step, as a fraction of
+    the target's area. Debug stat like paint_coverage: weight 1.0, enabled:
+    false, and the episode total is |painted \\ target| / |target|.
+
+    With paint_coverage (|painted & target| / |target|) it gives
+    IoU = cov / (1 + out) and precision = cov / (cov + out). Zero unless the
+    command tracks the whole wall (track_wall_paint; on by default below 257
+    envs).
+    """
+
+    def compute(self):
+        return self.command_manager.paint_outside_delta
+
+
+class paint_steps(RobotObjectTrackReward):
+    """1 on steps that add paint anywhere on the wall. Debug stat; the episode
+    total is the number of painting steps."""
+
+    def compute(self):
+        return self.command_manager.painting_step
+
+
+class paint_wall_dist(RobotObjectTrackReward):
+    """Roller-head distance from the wall plane in m, on steps that add paint
+    (0 otherwise). Debug stat; episode total / paint_steps total is the mean
+    distance while painting.
+
+    The rasterizer projects the roller onto the wall however far away it is,
+    so this is the check that paint was laid at the wall: about the roller
+    radius, 0.042 m, when the roller touches it.
+    """
+
+    def compute(self):
+        return self.command_manager.roller_wall_dist * self.command_manager.painting_step
+
+
+class paint_wall_force(RobotObjectTrackReward):
+    """Tool-wall normal force in N on steps that add paint (0 otherwise).
+    Debug stat; episode total / paint_steps total is how hard the tool presses
+    while painting. Zero unless the wall is solid (wall_collision)."""
+
+    def compute(self):
+        return self.command_manager.tool_wall_force * self.command_manager.painting_step
+
+
 class object_joint_pos_tracking(RobotObjectTrackReward):
     def __init__(self, sigma: float=0.25, **kwargs):
         super().__init__(**kwargs)

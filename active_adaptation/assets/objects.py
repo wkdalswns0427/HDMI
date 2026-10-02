@@ -375,6 +375,20 @@ ROLLER_CFG = RigidObjectCfg(
     ),
 )
 
+# H1-2 variant: same head, pole 0.370 m longer at the bottom. GMR scales the
+# human motion to the robot, so H1-2's grip span is 0.873 m against G1's
+# 0.503 m (make_roller_usd.py --name roller_h1_2 --pole_extension 0.370).
+ROLLER_H1_2_CFG = RigidObjectCfg(
+    prim_path="{ENV_REGEX_NS}/roller_h1_2",
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=f"{ASSET_PATH}/objects/roller_h1_2/roller_h1_2.usd",
+        activate_contact_sensors=True,
+        mass_props=sim_utils.MassPropertiesCfg(
+            mass=2.72,
+        ),
+    ),
+)
+
 # --- canvas ---------------------------------------------------------------
 # Visualization only for the painting tasks: kinematic so it never moves, and
 # NO collision_props, so the roller passes through and the dynamics are
@@ -384,6 +398,40 @@ CANVAS_CFG = RigidObjectCfg(
     prim_path="{ENV_REGEX_NS}/canvas",
     spawn=sim_utils.UsdFileCfg(
         usd_path=f"{ASSET_PATH}/objects/canvas/canvas.usd",
+        activate_contact_sensors=False,
+        mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
+        rigid_props=sim_utils.RigidBodyPropertiesCfg(
+            rigid_body_enabled=True,
+            kinematic_enabled=True,
+            disable_gravity=True,
+        ),
+    ),
+)
+
+# The same wall, solid: the plate has a collider and a low-friction material
+# (pipeline/scripts/make_canvas_usd.py --name canvas_collide --collision), so
+# the roller presses on it instead of passing through. Kinematic, so contact
+# never moves it. Used by the contact-gated painting tasks (wall_collision).
+CANVAS_COLLIDE_CFG = RigidObjectCfg(
+    prim_path="{ENV_REGEX_NS}/canvas",
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=f"{ASSET_PATH}/objects/canvas_collide/canvas_collide.usd",
+        activate_contact_sensors=False,
+        mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
+        rigid_props=sim_utils.RigidBodyPropertiesCfg(
+            rigid_body_enabled=True,
+            kinematic_enabled=True,
+            disable_gravity=True,
+        ),
+    ),
+)
+
+# H1-2's solid wall: taller, built from the H1-2 paint target (top at 1.858 m;
+# make_canvas_usd.py --name canvas_h1_2_collide --collision --target ...h1_2...).
+CANVAS_H1_2_COLLIDE_CFG = RigidObjectCfg(
+    prim_path="{ENV_REGEX_NS}/canvas",
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=f"{ASSET_PATH}/objects/canvas_h1_2_collide/canvas_h1_2_collide.usd",
         activate_contact_sensors=False,
         mass_props=sim_utils.MassPropertiesCfg(mass=1.0),
         rigid_props=sim_utils.RigidBodyPropertiesCfg(

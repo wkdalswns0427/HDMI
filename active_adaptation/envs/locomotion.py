@@ -75,16 +75,22 @@ class SimpleEnv(_Env):
                     extra_obj_cfg.prim_path = "{ENV_REGEX_NS}/" + extra_obj_name
                     setattr(scene_cfg, extra_obj_name, extra_obj_cfg)
 
-                # Visualization canvas for the painting tasks. Spawned only
-                # when the task defines a paint target, and only when
-                # show_canvas is left on. It has no collision, so it changes
-                # nothing physically -- see CANVAS_CFG.
+                # Canvas for the painting tasks. Spawned only when the task
+                # defines a paint target, and only when show_canvas is left on.
+                # The default asset has no collision, so it changes nothing
+                # physically -- see CANVAS_CFG. wall_collision swaps in the
+                # solid wall (CANVAS_COLLIDE_CFG) and forces it on.
+                wall_collision = self.cfg.command.get("wall_collision", False)
+                canvas_asset = self.cfg.command.get(
+                    "canvas_asset", "canvas_collide" if wall_collision else "canvas"
+                )
                 if (self.cfg.command.get("target_region_path", None) is not None
-                        and self.cfg.command.get("show_canvas", True)):
-                    canvas_cfg = OBJECTS["canvas"]
+                        and (self.cfg.command.get("show_canvas", True) or wall_collision)):
+                    canvas_cfg = OBJECTS[canvas_asset]
                     canvas_cfg.prim_path = "{ENV_REGEX_NS}/canvas"
                     setattr(scene_cfg, "canvas", canvas_cfg)
-                    print("Spawning paint canvas (visual only, no collision)")
+                    print(f"Spawning paint canvas `{canvas_asset}` "
+                          f"({'solid' if wall_collision else 'visual only, no collision'})")
 
                 obj_name = self.cfg.command.object_asset_name
                 obj_contact_body_name = self.cfg.command.object_body_name
@@ -109,7 +115,18 @@ class SimpleEnv(_Env):
                         track_air_time=False,
                         filter_prim_paths_expr=[contact_geom_prim_path],
                     ))
-                    
+
+                # Force between the tool and the solid wall, for contact-gated
+                # painting. The canvas body sits one level below the spawned
+                # prim, named after its asset (nested-same-name layout).
+                if wall_collision:
+                    setattr(scene_cfg, "tool_wall_contact_forces", ContactSensorCfg(
+                        prim_path=contact_geom_prim_path,
+                        history_length=0,
+                        track_air_time=False,
+                        filter_prim_paths_expr=["{ENV_REGEX_NS}/canvas/" + canvas_asset],
+                    ))
+
             body_scale_rand = self.cfg.randomization.get("body_scale", None)
             if body_scale_rand is not None:
                 from active_adaptation.assets.spawn import clone

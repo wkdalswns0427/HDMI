@@ -6,12 +6,19 @@ never needs to know its height. The painted target is a region ON this wall and
 moves independently of it -- a real wall does not slide up and down when the
 job does.
 
-Purely a visualization prop: kinematic, collision DISABLED, so the roller passes
-through it and the physics is identical to a run without it. That keeps results
-comparable with every run so far. Giving it collision would change the dynamics
--- arguably for the better, since the human demo was pressing against a real
-wall and the robot currently pushes against nothing -- but that is a separate
-experiment, not a rendering change.
+By default a visualization prop: kinematic, collision DISABLED, so the roller
+passes through it and the physics is identical to a run without it. That keeps
+results comparable with every run so far.
+
+With --collision it is a real wall: the plate gets a collider and a physics
+material, so the roller (and the robot) can press on it and cannot pass
+through. The contact-gated painting tasks use that variant:
+
+    python scripts/make_canvas_usd.py --name canvas_collide --collision
+
+Friction defaults low (0.1). The sim roller head is part of one rigid body and
+cannot spin, so it slides along the wall where a real roller rolls; full
+sliding friction would fight every stroke.
 
 Local frame: the plate lies in the XY plane, so local +X is the wall's axis_u,
 local +Y is axis_v, and local +Z is the wall normal. The command positions and
@@ -45,6 +52,10 @@ _ap.add_argument("--max-z-offset", type=float, default=0.5,
                       "cover; the wall is built tall enough for it")
 _ap.add_argument("--headroom", type=float, default=0.2,
                  help="extra wall above the highest reachable target")
+_ap.add_argument("--collision", action="store_true",
+                 help="give the plate a collider and a physics material")
+_ap.add_argument("--friction", type=float, default=0.1,
+                 help="static and dynamic friction of the wall with --collision")
 ARGS, _rest = _ap.parse_known_args()
 sys.argv = [sys.argv[0]]
 
@@ -54,7 +65,7 @@ app = AppLauncher(headless=True).app
 
 import os
 import numpy as np
-from pxr import Usd, UsdGeom, UsdPhysics, Gf
+from pxr import Usd, UsdGeom, UsdPhysics, UsdShade, Gf
 
 NAME = ARGS.name
 OUT = str(paths.ASSETS / "objects" / NAME / f"{NAME}.usd")
@@ -91,6 +102,17 @@ plate.CreateSizeAttr(1.0)
 plate.AddTranslateOp().Set(Gf.Vec3d(0.0, height / 2.0, -ARGS.thickness / 2.0))
 plate.AddScaleOp().Set(Gf.Vec3f(width, height, ARGS.thickness))
 plate.CreateDisplayColorAttr([Gf.Vec3f(0.92, 0.90, 0.86)])
+
+if ARGS.collision:
+    UsdPhysics.CollisionAPI.Apply(plate.GetPrim())
+    material = UsdShade.Material.Define(stage, f"/{NAME}/{NAME}/wall_material")
+    material_api = UsdPhysics.MaterialAPI.Apply(material.GetPrim())
+    material_api.CreateStaticFrictionAttr(ARGS.friction)
+    material_api.CreateDynamicFrictionAttr(ARGS.friction)
+    material_api.CreateRestitutionAttr(0.0)
+    UsdShade.MaterialBindingAPI.Apply(plate.GetPrim()).Bind(
+        material, UsdShade.Tokens.weakerThanDescendants, "physics"
+    )
 
 stage.GetRootLayer().Save()
 

@@ -23,9 +23,20 @@ from pathlib import Path as _Path
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 from hdmi_pipeline import paths
 
-MOTION_PATH = paths.MOTION_DATA / "wall_painting2" / "motion.npz"
-OUTPUT_PATH = paths.TASK_INFO / "wall_painting2" / "roller_head_swept_3d.png"
-TRAJECTORY_PATH = paths.TASK_INFO / "wall_painting2" / "roller_head_trajectory.npz"
+import argparse as _argparse
+_ap = _argparse.ArgumentParser()
+_ap.add_argument("--task", default="wall_painting2",
+                 help="motion under data/motion/data_for_sim/ and output dir under task_info/")
+_ap.add_argument("--axis_offset", type=float, default=0.7,
+                 help="two_hand axis_offset from the task's annotation (G1 0.7, H1-2 1.070)")
+_ap.add_argument("--no_show", action="store_true",
+                 help="save the outputs without opening a window")
+ARGS = _ap.parse_args()
+
+MOTION_PATH = paths.MOTION_DATA / ARGS.task / "motion.npz"
+OUTPUT_PATH = paths.TASK_INFO / ARGS.task / "roller_head_swept_3d.png"
+OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+TRAJECTORY_PATH = paths.TASK_INFO / ARGS.task / "roller_head_trajectory.npz"
 
 UNITREE_BODY_NAMES = [
     "pelvis",
@@ -59,7 +70,7 @@ UNITREE_BODY_NAMES = [
 ]
 
 
-AXIS_OFFSET = 0.7
+AXIS_OFFSET = ARGS.axis_offset
 
 HEAD_X_MIN = -0.11502573
 HEAD_X_MAX = 0.11411140
@@ -234,11 +245,16 @@ T = body_pos.shape[0]
 
 print("frames :", T)
 
-LEFT_WRIST_INDEX = UNITREE_BODY_NAMES.index(
+# Index bodies by the motion's own meta.json, so any robot works (the list
+# above is G1's and stays only as documentation).
+import json as _json
+BODY_NAMES = _json.load(open(MOTION_PATH.parent / "meta.json"))["body_names"]
+
+LEFT_WRIST_INDEX = BODY_NAMES.index(
     "left_wrist_yaw_link"
 )
 
-RIGHT_WRIST_INDEX = UNITREE_BODY_NAMES.index(
+RIGHT_WRIST_INDEX = BODY_NAMES.index(
     "right_wrist_yaw_link"
 )
 
@@ -495,4 +511,5 @@ print(
     OUTPUT_PATH,
 )
 
-plt.show()
+if not ARGS.no_show:
+    plt.show()

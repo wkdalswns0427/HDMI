@@ -11,8 +11,20 @@ offset, one complete episode per env, every episode from frame 0 of the clip
                  (command.success: t >= motion_len - 1)
     cov|success  coverage over the successful episodes only -- painting
                  quality with the drop rate taken out
-    episode_len  how long episodes last before terminating
     lost         fraction of episodes ended by the lost-contact termination
+    IoU|succ     painted area vs target, intersection over union, over the
+                 successful episodes; paint outside the target lowers it
+    prec|succ    fraction of the paint that landed inside the target
+    wall dist    mean roller-head distance from the wall while painting; the
+                 rasterizer does not check contact, so ~0.042 m (the roller
+                 radius) is what says the paint was laid at the wall
+    J|succ       mechanical work of a completed stroke, |tau * qdot| summed
+    J/m2|succ    that work per square metre of target painted
+
+Everything else eval_episodes.py measures (episode_len, both-hands contact,
+work by legs / waist / arms, mean power, RMS and peak torque) is in
+results.json, and per-step joint torque and velocity for every episode in
+z<offset>_traces.npz next to it.
 
 Coverage alone cannot tell "paints the wrong place" from "drops the roller
 early", so both are reported, and cov|success separates them: a policy that
@@ -62,7 +74,8 @@ def run_one(checkpoint: str, z: float, task: str, num_envs: int,
 
     cmd = [
         PY, str(EVAL),
-        f"task=G1/hdmi/{task}",
+        # a bare name is a G1 task; give H1_2/hdmi/<name> for the H1-2 ones
+        f"task={task if '/' in task else f'G1/hdmi/{task}'}",
         # ppo_roa does NOT exist -- the algo configs come from a structured
         # config store, not cfg/algo/*.yaml, and the trained checkpoints all
         # use ppo_roa_train. Getting it wrong fails instantly in hydra.
@@ -79,9 +92,12 @@ def run_one(checkpoint: str, z: float, task: str, num_envs: int,
         "++task.command.target_region_uv_range.v=[0.0,0.0]",
         "task.command.target_region_scale_range.width=[1.0,1.0]",
         "task.command.target_region_scale_range.height=[1.0,1.0]",
+        # the contact tasks also shift the wall along its normal; keep it put
+        "++task.command.wall_normal_offset_range=[0.0,0.0]",
         # keep hydra's per-run directories out of outputs_play/
         # quoted: hydra's override grammar is not happy with a bare `+` in z+0.1
         f"hydra.run.dir='{out_dir / 'hydra' / f'z{z:+.3f}'}'",
+        f"+save_traces='{out_dir / f'z{z:+.3f}_traces.npz'}'",
     ]
 
     env = dict(os.environ)
@@ -127,7 +143,8 @@ def main():
     ap.add_argument("--checkpoint", required=True,
                     help="policy to evaluate (absolute path)")
     ap.add_argument("--task", default="wall_painting2_both",
-                    help="task config under cfg/task/G1/hdmi. Must have the "
+                    help="task config under cfg/task/G1/hdmi, or a path like "
+                         "H1_2/hdmi/<name> for another robot. Must have the "
                          "SAME observation space the checkpoint was trained "
                          "with -- the z offset is applied by CLI override, so "
                          "sweep the training task. wall_painting_goal adds "
@@ -156,9 +173,10 @@ def main():
     print(f"task       : {args.task}")
     print(f"episodes   : {args.num_envs} per offset, one per env, from frame 0")
     print(f"logs       : {out_dir}\n")
-    print(f"{'z [m]':>6}  {'coverage (s.e.)':>15}  {'vs z=0':>6}  {'success':>7}  "
-          f"{'cov|success':>11}  {'ep_len':>6}  {'lost':>5}  {'time':>5}")
-    print("-" * 78)
+    print(f"{'z [m]':>6}  {'coverage (s.e.)':>15}  {'success':>7}  {'lost':>5}  "
+          f"{'cov|succ':>8}  {'IoU|succ':>8}  {'prec|succ':>9}  {'wall dist':>9}  "
+          f"{'J|succ':>7}  {'J/m2|succ':>9}  {'time':>5}")
+    print("-" * 104)
 
     results = {}
     for z in args.offsets:
@@ -167,16 +185,22 @@ def main():
                     args.timeout, out_dir)
         results[f"{z:+.3f}"] = r
         if r is not None:
-            base = (results.get("+0.000") or {}).get("coverage")
-            rel = f"{r['coverage'] / base * 100:5.1f}%" if base else "     -"
             sem = r["coverage_std"] / math.sqrt(r["episodes"])
-            cgs = r["coverage_given_success"]
-            cgs_s = f"{cgs:11.3f}" if cgs is not None else "          -"
             cov_s = f"{r['coverage']:.3f} ({sem:.3f})"
-            print(f"{z:+6.2f}  {cov_s:>15}  {rel:>6}  "
-                  f"{r['success']:7.3f}  {cgs_s}  {r['episode_len']:6.1f}  "
-                  f"{r['lost_contact_term']:5.2f}  {time.time() - t0:4.0f}s",
-                  flush=True)
+
+            def fmt(key, width, spec):
+                x = r.get(key)
+                return f"{x:{width}{spec}}" if x is not None else " " * (width - 1) + "-"
+
+            print(f"{z:+6.2f}  {cov_s:>15}  {fmt('success', 7, '.3f')}  "
+                  f"{fmt('lost_contact_term', 5, '.2f')}  "
+                  f"{fmt('coverage_given_success', 8, '.3f')}  "
+                  f"{fmt('iou_given_success', 8, '.3f')}  "
+                  f"{fmt('precision_given_success', 9, '.3f')}  "
+                  f"{fmt('wall_dist', 7, '.3f')} m  "
+                  f"{fmt('work_J_given_success', 7, '.0f')}  "
+                  f"{fmt('J_per_m2_given_success', 9, '.0f')}  "
+                  f"{time.time() - t0:4.0f}s", flush=True)
         # Write as we go, so a crash partway still leaves the finished rows.
         (out_dir / "results.json").write_text(json.dumps(results, indent=2))
 

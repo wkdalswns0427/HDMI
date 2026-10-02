@@ -19,7 +19,6 @@ Pipeline:
 from pathlib import Path
 
 import numpy as np
-import plotly.graph_objects as go
 
 
 # ============================================================
@@ -31,8 +30,16 @@ from pathlib import Path as _Path
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 from hdmi_pipeline import paths
 
-INPUT_PATH = paths.TASK_INFO / "wall_painting2" / "roller_head_trajectory.npz"
-OUTPUT_PATH = paths.TASK_INFO / "wall_painting2" / "roller_fitted_plane.npz"
+import argparse as _argparse
+_ap = _argparse.ArgumentParser()
+_ap.add_argument("--task", default="wall_painting2",
+                 help="motion under data/motion/data_for_sim/ and output dir under task_info/")
+_ap.add_argument("--no_show", action="store_true",
+                 help="save the outputs without opening a window")
+ARGS = _ap.parse_args()
+
+INPUT_PATH = paths.TASK_INFO / ARGS.task / "roller_head_trajectory.npz"
+OUTPUT_PATH = paths.TASK_INFO / ARGS.task / "roller_fitted_plane.npz"
 
 
 # ============================================================
@@ -712,6 +719,13 @@ print(OUTPUT_PATH)
 # 13. Interactive 3D visualization
 # ============================================================
 
+# Interactive 3D view only from here on; everything above is saved already.
+# plotly is optional -- none of mj's envs has it -- so --no_show (or a
+# missing plotly) stops here.
+if ARGS.no_show:
+    raise SystemExit(0)
+import plotly.graph_objects as go
+
 fig = go.Figure()
 
 
@@ -995,4 +1009,5 @@ fig.update_layout(
 # Show interactively
 # ============================================================
 
-fig.show()
+if not ARGS.no_show:
+    fig.show()

@@ -1,0 +1,63 @@
+{
+  "_comment": [
+    "wall_painting2 on Unitree H1-2. Same source clip and same GVHMR prediction as the G1",
+    "version; only the retarget target differs. H1-2's grip span is 0.873 m (G1: 0.503 m)",
+    "because GMR scales the human motion to the robot, so it holds `roller_h1_2`: the same",
+    "head on a pole 0.370 m longer at the bottom. The left grip stays 0.197 m below the roller",
+    "origin as on G1, so axis_offset = 0.197 + 0.873 = 1.070 and the right grip sits at",
+    "local z -1.070. contact_target_pos_offset is ordered [left, right] to match",
+    "contact_eef_body_name in base/hdmi-base-h1_2.yaml.",
+    "Packed with gmr_to_hdmi.py --trim 3: -- the first 3 GMR frames (0.1 s) are an IK",
+    "start-up transient (hip yaw 7.2 rad/s, torso 6.6 rad/s at 50 fps frames 0-1) that made",
+    "every frame-0 episode fail. Segment ends past the trimmed length are clipped."
+  ],
+  "object": {
+    "name": "roller_h1_2",
+    "asset": "roller_h1_2"
+  },
+  "extra_objects": [],
+  "segments": [
+    {
+      "start": 0,
+      "end": 341,
+      "mode": "two_hand",
+      "parent_a": "right_wrist_yaw_link",
+      "parent_b": "left_wrist_yaw_link",
+      "axis_offset": 1.07,
+      "local_axis": "z"
+    }
+  ],
+  "contact": [
+    [
+      0,
+      341
+    ]
+  ],
+  "smoothing": {
+    "window": 5
+  },
+  "contact_target_pos_offset": [
+    [
+      0.0,
+      0,
+      -0.197
+    ],
+    [
+      0.0,
+      0,
+      -1.07
+    ]
+  ],
+  "contact_eef_pos_offset": [
+    [
+      0.05,
+      0.0,
+      0.0
+    ],
+    [
+      0.05,
+      0.0,
+      0.0
+    ]
+  ]
+}
